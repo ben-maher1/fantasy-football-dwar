@@ -75,6 +75,26 @@ class DraftDates(_Frozen):
         return date.fromisoformat(f"{year}-{self.default_month_day}")
 
 
+class SamplerSettings(_Frozen):
+    chains: int = Field(ge=2)
+    tune: int = Field(gt=0)
+    draws: int = Field(gt=0)
+
+
+class DiagnosticThresholds(_Frozen):
+    max_divergences: int = Field(ge=0)
+    max_rhat: float = Field(gt=1)
+    min_ess_bulk: float = Field(gt=0)
+    min_ess_tail: float = Field(gt=0)
+
+
+class ModelConfig(_Frozen):
+    seed: int
+    first_season: int
+    sampler: SamplerSettings
+    diagnostics: DiagnosticThresholds
+
+
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
@@ -92,3 +112,7 @@ def load_format(name: str) -> LeagueFormat:
 
 def load_draft_dates() -> DraftDates:
     return DraftDates(**_read_yaml(config_dir() / "draft_dates.yaml"))
+
+
+def load_model_config() -> ModelConfig:
+    return ModelConfig(**_read_yaml(config_dir() / "model.yaml"))
