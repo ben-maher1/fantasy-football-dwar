@@ -1,0 +1,12 @@
+# 12-team superflex, full PPR. Lineup slots drive replacement level (step 4).
+name: superflex_ppr
+scoring: ppr
+teams: 12
+lineup:
+  QB: 1
+  RB: 2
+  WR: 3
+  TE: 1
+  FLEX: 2        # RB/WR/TE
+  SUPERFLEX: 1   # QB/RB/WR/TE
+discount: 0.85
