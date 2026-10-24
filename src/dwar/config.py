@@ -7,6 +7,7 @@ format-specific comes from `config/` through these models.
 from __future__ import annotations
 
 import os
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -61,6 +62,19 @@ class LeagueFormat(_Frozen):
     discount: float = Field(default=0.85, gt=0, le=1)
 
 
+class DraftDates(_Frozen):
+    """Final day of each NFL Draft, with a conservative fallback for
+    unlisted years (see config/draft_dates.yaml)."""
+
+    default_month_day: str = Field(pattern=r"^\d{2}-\d{2}$")
+    end_dates: dict[int, date] = Field(default_factory=dict)
+
+    def end_of(self, year: int) -> date:
+        if year in self.end_dates:
+            return self.end_dates[year]
+        return date.fromisoformat(f"{year}-{self.default_month_day}")
+
+
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
@@ -74,3 +88,7 @@ def load_scoring(name: str) -> ScoringConfig:
 
 def load_format(name: str) -> LeagueFormat:
     return LeagueFormat(**_read_yaml(config_dir() / "formats" / f"{name}.yaml"))
+
+
+def load_draft_dates() -> DraftDates:
+    return DraftDates(**_read_yaml(config_dir() / "draft_dates.yaml"))

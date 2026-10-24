@@ -1,0 +1,10 @@
+# Final day of each NFL Draft. A pick is treated as knowable the day after.
+#
+# Years not listed fall back to `default_month_day` (May 15), which is later
+# than any draft since 1990 ended, so a missing year can delay rookies
+# appearing in a fit but can never leak them early. Add each year's verified
+# date here as it is announced so live runs see rookies right after the draft.
+default_month_day: "05-15"
+end_dates:
+  1990: 1990-04-23   # https://en.wikipedia.org/wiki/1990_NFL_draft
+  2026: 2026-04-25   # https://en.wikipedia.org/wiki/2026_NFL_draft
