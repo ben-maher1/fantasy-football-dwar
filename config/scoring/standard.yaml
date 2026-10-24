@@ -1,0 +1,15 @@
+# Standard (no PPR). Matches nflverse `fantasy_points`.
+name: standard
+pass_yd: 0.04
+pass_td: 4
+pass_int: -2
+pass_2pt: 2
+rush_yd: 0.1
+rush_td: 6
+rush_2pt: 2
+rec: 0
+rec_yd: 0.1
+rec_td: 6
+rec_2pt: 2
+fumble_lost: -2
+st_td: 6

@@ -1,0 +1,31 @@
+[project]
+name = "dwar"
+version = "0.1.0"
+description = "Dynasty Wins Above Replacement: Bayesian dynasty fantasy football valuation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "nflreadpy>=0.1.5",
+    "polars>=1.0",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.100",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dwar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not network'"
+markers = [
+    "network: hits the live nflverse API (run with: uv run pytest -m network)",
+]
