@@ -1,0 +1,16 @@
+# Data and outputs are never committed (see CLAUDE.md)
+data/
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.hypothesis/
+*.egg-info/
+dist/
+build/
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
