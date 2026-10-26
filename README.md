@@ -18,5 +18,7 @@ uv run pytest -m network      # live nflverse checks (downloads data)
 | --- | --- | --- |
 | 1 | nflverse ingest + caching; configurable fantasy scoring | done |
 | 2 | Player-season table with as-of filtering + no-lookahead test | done |
-| 3 | WR talent model: fit, diagnostics, parameter recovery | in review |
-| 4–7 | All positions + DWAR, validation, CLI, market backtest | not started |
+| 3 | WR talent model: fit, diagnostics, parameter recovery | done |
+| 4a | Talent fits for QB, RB, WR, TE | in review |
+| 4b | Replacement level, points to wins, projection, DWAR output | not started |
+| 5–7 | Validation, CLI, market backtest | not started |

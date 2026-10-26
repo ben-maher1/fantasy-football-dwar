@@ -26,6 +26,7 @@ class ModelData:
     position: str
     # one entry per observed game
     y: np.ndarray            # weekly fantasy points
+    zero_week_mean: float    # mean points over weeks at or below zero (QBs go negative)
     obs_ps: np.ndarray       # index into player-seasons
     # one entry per player-season, sorted by player then season
     ps_keys: pl.DataFrame    # player_id, season, games_played
@@ -159,9 +160,11 @@ def build_model_data(
     else:
         season_x = pl.DataFrame()
 
+    y = obs["fpts"].to_numpy().astype(float)
     return ModelData(
         position=position,
-        y=obs["fpts"].to_numpy().astype(float),
+        y=y,
+        zero_week_mean=float(y[y <= 0].mean()) if (y <= 0).any() else 0.0,
         obs_ps=obs["ps_idx"].to_numpy().astype(np.int64),
         ps_keys=ps.select("player_id", "season", "games_played"),
         ps_player=ps["player_idx"].to_numpy(),

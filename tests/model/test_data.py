@@ -116,6 +116,13 @@ def test_prospect_covariates_slot(small):
     assert d.prospect_x[:, -1].tolist() == [20.0, 19.0, 21.0]
 
 
+def test_zero_week_mean():
+    weeks = [("A", 2010, "QB", -2.0), ("A", 2010, "QB", 0.0), ("A", 2010, "QB", 20.0), ("A", 2011, "QB", 15.0)]
+    static = [{"player_id": "A", "draft_pick": 1, "first_season": 2010, "forty": None, "ht_in": 75, "wt": 220.0}]
+    d = build_model_data(tables(weeks, {"A": {2010: 22.0, 2011: 23.0}}, static), "QB")
+    assert d.zero_week_mean == -1.0
+
+
 def test_empty_position_raises(small):
     with pytest.raises(ValueError, match="no TE games"):
         build_model_data(small, position="TE")

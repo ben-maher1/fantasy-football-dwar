@@ -16,13 +16,14 @@ window get a separate veteran prior.
 
 Weekly distributions (config `likelihood`):
 
-- sqrt_hurdle (default): a week is a zero (or the rare negative week, about
-  0.4% of WR weeks and never below -3, recorded as zero) with probability
+- sqrt_hurdle (default): a week scores at or below zero with probability
   1 - p, where logit(p) = h0 + h1*(loc - 3). Otherwise points = Z^2 with
   Z ~ StudentT(nu, loc, sigma), so the latent scale is sqrt(points) and
   loc = softplus(latent). Matches the quarter of WR weeks that are zero and
-  the right skew of the rest. Expected points:
-  talent = p * (loc^2 + sigma^2 * nu / (nu - 2)).
+  the right skew of the rest. A week at or below zero is worth `zero_value`,
+  the position's observed mean over such weeks (about -0.6 for QBs, whose
+  bad weeks go negative; about 0 elsewhere). Expected points:
+  talent = p * (loc^2 + sigma^2 * nu / (nu - 2)) + (1 - p) * zero_value.
 - studentt: symmetric heavy tails on the points scale, as first specified;
   center = talent. Kept as the baseline it was compared against.
 
@@ -97,7 +98,7 @@ def talent_from_center(likelihood: str, center, params: dict, lib=np):
     if scale_of(likelihood) == "sqrt":
         nu = params["nu"]
         p = nonzero_prob(center, params["h0"], params["h1"], lib)
-        return p * (center**2 + params["sigma"] ** 2 * nu / (nu - 2.0))
+        return p * (center**2 + params["sigma"] ** 2 * nu / (nu - 2.0)) + (1 - p) * params.get("zero_value", 0.0)
     return center
 
 
@@ -109,7 +110,7 @@ def simulate_weeks(likelihood: str, center: np.ndarray, params: dict, rng: np.ra
     t = params["sigma"] * rng.standard_t(params["nu"], center.shape)
     if likelihood == "sqrt_hurdle":
         p = nonzero_prob(center, params["h0"], params["h1"], np)
-        return np.where(rng.random(center.shape) < p, (center + t) ** 2, 0.0)
+        return np.where(rng.random(center.shape) < p, (center + t) ** 2, params.get("zero_value", 0.0))
     return center + t
 
 
@@ -184,7 +185,7 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
             h0 = pm.Normal("h0", 1.0, 1.5)
             h1 = pm.Normal("h1", 0.0, 1.5)
             loc = pm.Deterministic("loc", center, dims="player_season")
-            params = {"sigma": sigma, "nu": nu, "h0": h0, "h1": h1}
+            params = {"sigma": sigma, "nu": nu, "h0": h0, "h1": h1, "zero_value": d.zero_week_mean}
             pm.Deterministic("talent", talent_from_center(likelihood, loc, params, pt), dims="player_season")
             pos = d.y > 0
             pm.Bernoulli("scored", p=nonzero_prob(loc[d.obs_ps], h0, h1), observed=pos.astype(np.int64), dims="obs")

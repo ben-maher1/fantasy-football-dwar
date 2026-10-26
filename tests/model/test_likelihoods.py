@@ -25,6 +25,15 @@ def test_simulated_mean_equals_talent(likelihood, which):
     assert y.mean() == pytest.approx(talent, abs=0.05)
 
 
+def test_zero_value_counts_toward_talent():
+    rng = np.random.default_rng(2)
+    params = LIKELIHOOD_TRUTH["sqrt_hurdle"] | {"zero_value": -0.6}
+    center = np.full(400_000, 2.0)
+    y = simulate_weeks("sqrt_hurdle", center, params, rng)
+    assert (y <= 0).mean() > 0.2 and set(np.unique(y[y <= 0])) == {-0.6}
+    assert y.mean() == pytest.approx(talent_from_center("sqrt_hurdle", center[:1], params)[0], abs=0.05)
+
+
 def test_talent_is_increasing_in_center():
     talent = talent_from_center("sqrt_hurdle", np.linspace(0.5, 5.0, 50), LIKELIHOOD_TRUTH["sqrt_hurdle"])
     assert (np.diff(talent) > 0).all()

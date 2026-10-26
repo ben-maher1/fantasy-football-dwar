@@ -92,6 +92,7 @@ class DiagnosticThresholds(_Frozen):
 class ModelConfig(_Frozen):
     seed: int
     first_season: int
+    positions: tuple[str, ...]
     likelihood: Literal["sqrt_hurdle", "studentt"]
     sampler: SamplerSettings
     diagnostics: DiagnosticThresholds
