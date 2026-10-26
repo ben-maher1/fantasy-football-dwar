@@ -8,8 +8,9 @@ import pytest
 
 from dwar.config import load_model_config
 from dwar.model.fit import fit, sample
+from dwar.model.talent import scale_of
 
-from .simulate import TRUE_GAMMA, TRUTH, simulate
+from .simulate import SEASON_EFFECT, simulate
 
 
 def interval(posterior, name: str, lo: float, hi: float) -> np.ndarray:
@@ -30,13 +31,13 @@ def test_fit_passes_diagnostics(recovered):
 
 
 def test_global_parameters_recovered(recovered):
-    """Every truth must sit inside its 99% interval. Of 11 independent 90%
-    intervals about one misses by chance (two or fewer ~91% of the time), so
+    """Every truth must sit inside its 99% interval. Of 12 independent 90%
+    intervals about one misses by chance (two or fewer ~89% of the time), so
     allow two. Veteran prior parameters are checked against the realized
     veteran sample, which is all the data can reveal."""
     sim, result = recovered
     misses_90 = []
-    for name, truth in (TRUTH | sim.realized).items():
+    for name, truth in sim.truth.items():
         lo90, hi90 = interval(result.posterior, name, 5, 95)
         lo99, hi99 = interval(result.posterior, name, 0.5, 99.5)
         assert lo99 <= truth <= hi99, f"{name}: {truth} outside 99% [{lo99:.3f}, {hi99:.3f}]"
@@ -49,7 +50,7 @@ def test_prospect_coefficients_recovered(recovered):
     sim, result = recovered
     lo, hi = interval(result.posterior, "gamma", 0.5, 99.5)
     for j, name in enumerate(sim.data.prospect_x_names):
-        truth = TRUE_GAMMA.get(name, 0.0)
+        truth = sim.gamma.get(name, 0.0)
         assert lo[j] <= truth <= hi[j], f"{name}: {truth} outside [{lo[j]:.2f}, {hi[j]:.2f}]"
     forty = sim.data.prospect_x_names.index("forty_z")
     assert hi[forty] < 0, "a real 40-time effect should be detected as negative"
@@ -71,16 +72,18 @@ def test_outputs_written(recovered, tmp_path_factory):
         "talent_p05", "talent_p25", "talent_p50", "talent_p75", "talent_p95",
     }
     ppc = result.diagnostics.extra["posterior_predictive"]
-    for stat in ppc.values():
-        assert stat["sim_p05"] <= stat["observed"] <= stat["sim_p95"]
+    assert ppc["mean"]["fits"] and ppc["share_zero_or_less"]["fits"]
+    assert sum(s["fits"] for s in ppc.values()) >= len(ppc) - 1, ppc
 
 
 def test_season_covariate_slot(tmp_path):
-    sim = simulate(n_players=120, season_effect=1.5, seed=11)
+    cfg = load_model_config()
+    effect = SEASON_EFFECT[scale_of(cfg.likelihood)]
+    sim = simulate(n_players=120, season_effect=effect, seed=11)
     assert sim.data.season_x_names == ("boost",)
-    result = fit(sim.data, load_model_config(), tmp_path)
+    result = fit(sim.data, cfg, tmp_path)
     lo, hi = interval(result.posterior, "eta", 0.5, 99.5)
-    assert lo[0] <= 1.5 <= hi[0] and lo[0] > 0
+    assert lo[0] <= effect <= hi[0] and lo[0] > 0
 
 
 def test_same_seed_same_draws():

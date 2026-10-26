@@ -41,7 +41,13 @@ reliably, weekly, and unattended.
 
 Observation level: weekly fantasy points for player i in season s, week w, computed
 from raw stats under the configured scoring. Model points per game played (handle
-missed games separately, below), with a Student-t likelihood for blowup weeks.
+missed games separately, below). Weekly points are right-skewed with a point
+mass at zero (about a quarter of WR weeks), so the likelihood is a hurdle on the
+square-root scale (`sqrt_hurdle`): a zero-week probability that falls with talent,
+and otherwise points = Z^2 with Z Student-t (heavy tails for blowup weeks).
+`talent` is the implied expected points per game. A symmetric Student-t on points
+was the original spec; on real WRs it put talent about 1.3 PPG below observed
+scoring and is kept only as a baseline (`likelihood: studentt`).
 
 Latent structure:
 - `talent[i, s]`: player-season true scoring rate. Evolves as a random walk across

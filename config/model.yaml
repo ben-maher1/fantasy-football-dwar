@@ -1,6 +1,7 @@
 # Model fitting settings. Thresholds implement CLAUDE.md rule 5 (fail loudly).
 seed: 20261024
 first_season: 2006       # history window for fitting
+likelihood: sqrt_hurdle  # weekly points distribution; see model/talent.py
 sampler:
   chains: 4
   tune: 1000

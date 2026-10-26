@@ -21,7 +21,7 @@ from xarray import DataTree
 from dwar.config import ModelConfig
 from dwar.model.data import ModelData
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
-from dwar.model.talent import build_talent_model
+from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, simulate_weeks
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class FitResult:
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    compiled = nutpie.compile_pymc_model(build_talent_model(d))
+    compiled = nutpie.compile_pymc_model(build_talent_model(d, cfg.likelihood))
     s = cfg.sampler
     return nutpie.sample(
         compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False
@@ -60,23 +60,39 @@ def talent_summary(d: ModelData, posterior: DataTree) -> pl.DataFrame:
     )
 
 
-def posterior_predictive_check(d: ModelData, posterior: DataTree, seed: int) -> dict:
-    """Simulated vs observed weekly points: mean, spread, share of big weeks."""
+def ppc_stats(y: np.ndarray) -> dict[str, np.ndarray]:
+    """Summary statistics of weekly points; `y` may carry leading draw axes."""
+    q10, q50, q90 = np.percentile(y, [10, 50, 90], axis=-1)
+    return {
+        "mean": y.mean(axis=-1),
+        "sd": y.std(axis=-1),
+        "share_zero_or_less": (y <= 0).mean(axis=-1),
+        f"share_ge_{BIG_WEEK:g}": (y >= BIG_WEEK).mean(axis=-1),
+        "p10": q10,
+        "p50": q50,
+        "p90": q90,
+    }
+
+
+def posterior_predictive_check(d: ModelData, posterior: DataTree, likelihood: str, seed: int) -> dict:
+    """Observed weekly-points statistics vs the 90% range of the same
+    statistics over simulated seasons. `fits` is true when observed falls
+    inside that range."""
     rng = np.random.default_rng(seed)
-    talent, sigma, nu = (_draws(posterior, n) for n in ("talent", "sigma", "nu"))
-    picks = rng.choice(len(sigma), size=min(PPC_DRAWS, len(sigma)), replace=False)
+    talent = _draws(posterior, "loc" if likelihood == "sqrt_hurdle" else "talent")
+    params = {n: _draws(posterior, n) for n in LIKELIHOOD_PARAMS[likelihood]}
+    picks = rng.choice(len(talent), size=min(PPC_DRAWS, len(talent)), replace=False)
     sims = np.stack([
-        talent[k][d.obs_ps] + sigma[k] * rng.standard_t(nu[k], size=d.n_obs) for k in picks
+        simulate_weeks(likelihood, talent[k][d.obs_ps], {n: v[k] for n, v in params.items()}, rng)
+        for k in picks
     ])
-
-    def stats(x: np.ndarray) -> np.ndarray:
-        return np.stack([x.mean(axis=-1), x.std(axis=-1), (x >= BIG_WEEK).mean(axis=-1)], axis=-1)
-
-    observed, simulated = stats(d.y), stats(sims)
+    observed, simulated = ppc_stats(d.y), ppc_stats(sims)
     out = {}
-    for k, name in enumerate(("mean", "sd", f"share_ge_{BIG_WEEK:g}")):
-        lo, hi = np.percentile(simulated[:, k], [5, 95])
-        out[name] = {"observed": float(observed[k]), "sim_p05": float(lo), "sim_p95": float(hi)}
+    for name, obs in observed.items():
+        lo, hi = np.percentile(simulated[name], [5, 95])
+        out[name] = {
+            "observed": float(obs), "sim_p05": float(lo), "sim_p95": float(hi), "fits": bool(lo <= obs <= hi),
+        }
     return out
 
 
@@ -93,6 +109,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         "seed": cfg.seed,
         "sampler": cfg.sampler.model_dump(),
         "position": d.position,
+        "likelihood": cfg.likelihood,
         "n_obs": d.n_obs,
         "n_player_seasons": d.n_ps,
         "n_players": d.n_players,
@@ -102,7 +119,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         **(meta or {}),
     }
     if diag.passed:
-        diag.extra["posterior_predictive"] = posterior_predictive_check(d, posterior, cfg.seed)
+        diag.extra["posterior_predictive"] = posterior_predictive_check(d, posterior, cfg.likelihood, cfg.seed)
 
     name = d.position.lower()
     (out_dir / f"{name}_diagnostics.json").write_text(json.dumps(diag.to_dict(), indent=2, default=str))

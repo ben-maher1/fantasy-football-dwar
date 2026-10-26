@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -91,6 +92,7 @@ class DiagnosticThresholds(_Frozen):
 class ModelConfig(_Frozen):
     seed: int
     first_season: int
+    likelihood: Literal["sqrt_hurdle", "studentt"]
     sampler: SamplerSettings
     diagnostics: DiagnosticThresholds
 

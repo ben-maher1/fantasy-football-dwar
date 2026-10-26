@@ -12,22 +12,30 @@ import polars as pl
 
 from dwar.features.player_tables import PlayerTables
 from dwar.model.data import ModelData, build_model_data
+from dwar.config import load_model_config
+from dwar.model.talent import LIKELIHOOD_PARAMS, link, scale_of, simulate_weeks, talent_from_center
 
-TRUTH = {
-    "alpha0": 8.0,
-    "alpha_pick": -2.0,
-    "alpha_undrafted": -1.0,
-    "sigma_rookie": 2.0,
-    "mu_vet": 9.0,
-    "sigma_vet": 3.0,
-    "tau": 1.5,
-    "beta1": 0.1,
-    "beta2": -0.05,
-    "sigma": 5.0,
-    "nu": 5.0,
+# Latent truth on each likelihood's latent scale (points, or sqrt(points)
+# for the sqrt likelihoods, where 3.0 is about 9 ppg). The sqrt values sit
+# near the real-WR posterior medians.
+LATENT_TRUTH = {
+    "points": {
+        "alpha0": 8.0, "alpha_pick": -2.0, "alpha_undrafted": -1.0, "sigma_rookie": 2.0,
+        "mu_vet": 9.0, "sigma_vet": 3.0, "tau": 1.5, "beta1": 0.1, "beta2": -0.05,
+    },
+    "sqrt": {
+        "alpha0": 2.6, "alpha_pick": -0.5, "alpha_undrafted": -0.2, "sigma_rookie": 0.5,
+        "mu_vet": 3.0, "sigma_vet": 0.7, "tau": 0.4, "beta1": 0.03, "beta2": -0.02,
+    },
+}
+LIKELIHOOD_TRUTH = {
+    "sqrt_hurdle": {"sigma": 1.0, "nu": 20.0, "h0": 2.5, "h1": 2.0},
+    "studentt": {"sigma": 5.0, "nu": 5.0},
 }
 # Prospect covariates: faster 40 helps; the rest have no effect.
-TRUE_GAMMA = {"forty_z": -0.8}
+TRUE_GAMMA = {"points": {"forty_z": -0.8}, "sqrt": {"forty_z": -0.2}}
+# A season covariate's true coefficient, for the covariate-slot test.
+SEASON_EFFECT = {"points": 1.5, "sqrt": 0.4}
 FIRST_SEASON = 2006
 
 
@@ -35,8 +43,22 @@ FIRST_SEASON = 2006
 class Simulated:
     tables: PlayerTables
     data: ModelData
-    talent: np.ndarray  # true talent per player-season, aligned with data.ps_keys
+    likelihood: str
+    talent: np.ndarray  # true talent (expected ppg) per player-season, aligned with data.ps_keys
     realized: dict      # sample statistics of the simulated draws (see below)
+
+    @property
+    def scale(self) -> str:
+        return scale_of(self.likelihood)
+
+    @property
+    def gamma(self) -> dict[str, float]:
+        return TRUE_GAMMA[self.scale]
+
+    @property
+    def truth(self) -> dict[str, float]:
+        params = {k: v for k, v in LIKELIHOOD_TRUTH[self.likelihood].items() if k in LIKELIHOOD_PARAMS[self.likelihood]}
+        return LATENT_TRUTH[self.scale] | params | self.realized
 
 
 def _tables(players: pl.DataFrame, seasons: pl.DataFrame, weeks: pl.DataFrame) -> PlayerTables:
@@ -53,9 +75,12 @@ def simulate(
     weeks_per_season: int = 12,
     seed: int = 7,
     season_effect: float | None = None,
+    likelihood: str | None = None,
 ) -> Simulated:
     """`season_effect`, if given, adds one season covariate with that true
-    coefficient, to test the covariate slot."""
+    coefficient, to test the covariate slot. `likelihood` defaults to the
+    configured one."""
+    likelihood = likelihood or load_model_config().likelihood
     rng = np.random.default_rng(seed)
     player_rows, season_rows = [], []
     for k in range(n_players):
@@ -89,8 +114,8 @@ def simulate(
     covs = seasons.select("player_id", "season", "boost") if season_effect is not None else None
     d0 = build_model_data(_tables(players, seasons, skeleton), first_season=FIRST_SEASON, season_covariates=covs)
 
-    t = TRUTH
-    gamma = np.array([TRUE_GAMMA.get(n, 0.0) for n in d0.prospect_x_names])
+    t = LATENT_TRUTH[scale_of(likelihood)]
+    gamma = np.array([TRUE_GAMMA[scale_of(likelihood)].get(n, 0.0) for n in d0.prospect_x_names])
     rookie_mean = t["alpha0"] + t["alpha_pick"] * d0.log_pick_z + t["alpha_undrafted"] * d0.undrafted + d0.prospect_x @ gamma
     prior_mean = np.where(d0.pre_window > 0, t["mu_vet"], rookie_mean)
     prior_sd = np.where(d0.pre_window > 0, t["sigma_vet"], t["sigma_rookie"])
@@ -103,16 +128,18 @@ def simulate(
     )
     csum = np.cumsum(steps)
     level = csum - csum[d0.ps_start] + steps[d0.ps_start]
-    talent = level + age_effect
+    latent = level + age_effect
     if season_effect is not None:
-        talent = talent + season_effect * d0.season_x[:, 0]
+        latent = latent + season_effect * d0.season_x[:, 0]
+    center = link(latent, likelihood, lib=np)
+    talent = talent_from_center(likelihood, center, LIKELIHOOD_TRUTH[likelihood])
 
     keys = d0.ps_keys.select("player_id", "season")
     n = weeks_per_season
     weeks = pl.DataFrame({
         "player_id": np.repeat(keys["player_id"].to_numpy(), n),
         "season": np.repeat(keys["season"].to_numpy(), n),
-        "fpts": np.repeat(talent, n) + t["sigma"] * rng.standard_t(t["nu"], size=d0.n_ps * n),
+        "fpts": simulate_weeks(likelihood, np.repeat(center, n), LIKELIHOOD_TRUTH[likelihood], rng),
     })
     tables = _tables(players, seasons, weeks)
     data = build_model_data(tables, first_season=FIRST_SEASON, season_covariates=covs)
@@ -125,4 +152,4 @@ def simulate(
         {"mu_vet": float(vet_start.mean()), "sigma_vet": float(vet_start.std(ddof=1))}
         if len(vet_start) > 1 else {}
     )
-    return Simulated(tables=tables, data=data, talent=talent, realized=realized)
+    return Simulated(tables=tables, data=data, likelihood=likelihood, talent=talent, realized=realized)
