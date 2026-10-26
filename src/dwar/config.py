@@ -98,6 +98,13 @@ class ModelConfig(_Frozen):
     diagnostics: DiagnosticThresholds
 
 
+class ValueConfig(_Frozen):
+    draws: int = Field(gt=0)                 # posterior draws carried into the value layer
+    horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
+    replacement_seasons: int = Field(gt=0)   # recent complete seasons that set replacement level
+    pool_min_games: int = Field(ge=1)        # games for a player-season to count in that pool
+
+
 def _read_yaml(path: Path) -> dict:
     if not path.exists():
         raise FileNotFoundError(f"Config not found: {path}")
@@ -119,3 +126,7 @@ def load_draft_dates() -> DraftDates:
 
 def load_model_config() -> ModelConfig:
     return ModelConfig(**_read_yaml(config_dir() / "model.yaml"))
+
+
+def load_value_config() -> ValueConfig:
+    return ValueConfig(**_read_yaml(config_dir() / "value.yaml"))

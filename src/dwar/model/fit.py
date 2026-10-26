@@ -33,6 +33,7 @@ BIG_WEEK = 25.0
 
 @dataclass(frozen=True)
 class FitResult:
+    data: ModelData
     posterior: DataTree
     diagnostics: Diagnostics
     talent: pl.DataFrame
@@ -134,7 +135,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
     posterior.to_netcdf(out_dir / f"{name}.nc")
     talent = talent_summary(d, posterior)
     talent.write_parquet(out_dir / f"{name}_talent.parquet")
-    return FitResult(posterior=posterior, diagnostics=diag, talent=talent)
+    return FitResult(data=d, posterior=posterior, diagnostics=diag, talent=talent)
 
 
 def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None) -> dict[str, FitResult]:

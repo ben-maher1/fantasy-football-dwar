@@ -219,6 +219,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pymc" },
     { name = "pyyaml" },
+    { name = "scipy" },
 ]
 
 [package.dev-dependencies]
@@ -237,6 +238,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pymc", specifier = ">=6.3" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "scipy", specifier = ">=1.13" },
 ]
 
 [package.metadata.requires-dev]

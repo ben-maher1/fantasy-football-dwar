@@ -1,0 +1,5 @@
+# Value layer: talent -> DWAR (see src/dwar/value/dwar.py).
+draws: 1000              # posterior draws carried through projection
+horizon_seasons: 5       # full seasons after the current one (decision 3: plus the rest of this season)
+replacement_seasons: 3   # recent complete seasons whose player pool sets replacement level
+pool_min_games: 4        # games for a player-season to count in that pool and in team-score SD

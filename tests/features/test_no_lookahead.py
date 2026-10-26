@@ -93,6 +93,7 @@ def test_poisoned_future_is_ignored(raw, as_of):
         schedules=pl.concat([raw.schedules, pl.DataFrame([{
             "game_id": game_id(future_year, 1), "season": future_year, "week": 1,
             "game_type": "REG", "gameday": gameday(future_year, 1).isoformat(),
+            "home_team": "AAA", "away_team": "BBB",
         }])]),
         player_stats=pl.concat([raw.player_stats, pl.DataFrame([
             stat_row("00-1", "Vet", "WR", future_year, 1, receptions=999, receiving_yards=9999),
