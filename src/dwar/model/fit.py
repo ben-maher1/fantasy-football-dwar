@@ -19,7 +19,8 @@ import polars as pl
 from xarray import DataTree
 
 from dwar.config import ModelConfig
-from dwar.model.data import ModelData
+from dwar.features.player_tables import PlayerTables
+from dwar.model.data import ModelData, build_model_data
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
 from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, simulate_weeks
 
@@ -83,7 +84,10 @@ def posterior_predictive_check(d: ModelData, posterior: DataTree, likelihood: st
     params = {n: _draws(posterior, n) for n in LIKELIHOOD_PARAMS[likelihood]}
     picks = rng.choice(len(talent), size=min(PPC_DRAWS, len(talent)), replace=False)
     sims = np.stack([
-        simulate_weeks(likelihood, talent[k][d.obs_ps], {n: v[k] for n, v in params.items()}, rng)
+        simulate_weeks(
+            likelihood, talent[k][d.obs_ps],
+            {"zero_value": d.zero_week_mean} | {n: v[k] for n, v in params.items()}, rng,
+        )
         for k in picks
     ])
     observed, simulated = ppc_stats(d.y), ppc_stats(sims)
@@ -131,3 +135,19 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
     talent = talent_summary(d, posterior)
     talent.write_parquet(out_dir / f"{name}_talent.parquet")
     return FitResult(posterior=posterior, diagnostics=diag, talent=talent)
+
+
+def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None) -> dict[str, FitResult]:
+    """Fit every configured position. All positions are attempted so each
+    writes its diagnostics; if any fails, raises FitFailed for the first
+    failure after the rest have run (the run is failed as a whole)."""
+    results, failures = {}, []
+    for position in cfg.positions:
+        d = build_model_data(tables, position, cfg.first_season)
+        try:
+            results[position] = fit(d, cfg, out_dir, meta)
+        except FitFailed as e:
+            failures.append(e)
+    if failures:
+        raise failures[0]
+    return results

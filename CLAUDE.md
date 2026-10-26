@@ -52,8 +52,11 @@ scoring and is kept only as a baseline (`likelihood: studentt`).
 Latent structure:
 - `talent[i, s]`: player-season true scoring rate. Evolves as a random walk across
   seasons, with position-specific innovation scale.
-- Age curve: position-specific, hierarchical (a spline or quadratic in age, partially
-  pooled across positions). This drives the forward projection.
+- Age curve: position-specific, a quadratic in age. v1 fits each position separately
+  (thousands of player-seasons each pin their curves down, and separate fits are
+  faster and fail independently); pooling across positions or a spline can be added
+  if step 5 validation shows noisy or misshapen curves. This drives the forward
+  projection.
 - Prior for players with little NFL data: centered on draft capital (pick number,
   transformed) plus combine/size where available, by position. Rookies and
   second-year players lean on this. Veterans are dominated by their data.
