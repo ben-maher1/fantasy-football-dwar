@@ -1,0 +1,13 @@
+# Model fitting settings. Thresholds implement CLAUDE.md rule 5 (fail loudly).
+seed: 20261024
+first_season: 2006       # history window for fitting
+likelihood: sqrt_hurdle  # weekly points distribution; see model/talent.py
+sampler:
+  chains: 4
+  tune: 1000
+  draws: 2000   # 1000 left the real WR fit borderline on R-hat (1.0115); 2000 gives 1.006
+diagnostics:
+  max_divergences: 0
+  max_rhat: 1.01
+  min_ess_bulk: 400
+  min_ess_tail: 400

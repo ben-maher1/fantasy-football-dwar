@@ -1,1 +1,1 @@
-"""Placeholder; built in a later step (see CLAUDE.md build order)."""
+"""PyMC talent model, fitting, and diagnostics."""
