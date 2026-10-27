@@ -59,7 +59,8 @@ def season_availability(raw: RawTables, season: int, truth: pl.DataFrame, root: 
         return pl.read_parquet(path)
     cfg = load_model_config()
     tables, fits = fit_season(raw, season, cfg, root)
-    out = availability_forecast(fits, tables, raw.schedules, cfg.likelihood, truth, season, FORECAST_DRAWS, cfg.seed)
+    schedules = asof_snapshot(raw, tables.as_of).schedules
+    out = availability_forecast(fits, tables, schedules, cfg.likelihood, truth, season, FORECAST_DRAWS, cfg.seed)
     path.parent.mkdir(parents=True, exist_ok=True)
     out.write_parquet(path)
     return out
