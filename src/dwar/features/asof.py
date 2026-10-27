@@ -70,7 +70,7 @@ class AsOfSnapshot:
     draft: pl.DataFrame      # player_id, draft_year, draft_round, draft_pick, draft_position, draft_team
     combine: pl.DataFrame    # player_id, draft_year, measurables
     bio: pl.DataFrame        # player_id, name, birth_date
-    schedules: pl.DataFrame  # REG game dates for seasons whose schedule was published
+    schedules: pl.DataFrame  # REG games (date, teams) for seasons whose schedule was published
 
     def frames(self) -> dict[str, pl.DataFrame]:
         return {f.name: getattr(self, f.name) for f in fields(self) if f.name != "as_of"}
@@ -78,7 +78,7 @@ class AsOfSnapshot:
 
 def _gamedays(schedules: pl.DataFrame) -> pl.DataFrame:
     return schedules.filter(pl.col("game_type") == REGULAR_SEASON).select(
-        "game_id", "season", "week", gameday=pl.col("gameday").str.to_date()
+        "game_id", "season", "week", "home_team", "away_team", gameday=pl.col("gameday").str.to_date()
     )
 
 

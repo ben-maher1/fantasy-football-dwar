@@ -46,7 +46,7 @@ def schedules() -> pl.DataFrame:
             rows.append({
                 "game_id": game_id(s, w), "season": s, "week": w,
                 "game_type": "REG" if w <= 3 else "WC",
-                "gameday": gameday(s, w).isoformat(),
+                "gameday": gameday(s, w).isoformat(), "home_team": "AAA", "away_team": "BBB",
             })
     return pl.DataFrame(rows)
 

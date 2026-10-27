@@ -93,6 +93,15 @@ def test_standardize_with_flags_merges_identical_flags():
     assert out["h_w_missing"].to_list() == [0.0, 1.0, 0.0]
 
 
+def test_standardize_with_flags_merges_nearly_identical_flags():
+    # Height and weight missing together except for one player in 200.
+    h = [70.0] * 150 + [None] * 50
+    w = [200.0] * 150 + [None] * 49 + [210.0]
+    out = standardize_with_flags(pl.DataFrame({"h": h, "w": w}), ("h", "w"))
+    assert out.columns == ["h_z", "w_z", "h_w_missing"]
+    assert out["h_w_missing"].sum() == 50
+
+
 def test_season_covariates_slot(small):
     covs = pl.DataFrame({
         "player_id": ["C", "A", "A", "A", "B"], "season": [2007, 2010, 2011, 2013, 2012],
@@ -121,6 +130,32 @@ def test_zero_week_mean():
     static = [{"player_id": "A", "draft_pick": 1, "first_season": 2010, "forty": None, "ht_in": 75, "wt": 220.0}]
     d = build_model_data(tables(weeks, {"A": {2010: 22.0, 2011: 23.0}}, static), "QB")
     assert d.zero_week_mean == -1.0
+
+
+def test_unplayed_latest_class_rookie_gets_a_prior_only_season():
+    weeks = [("A", 2023, "WR", 10.0), ("A", 2024, "WR", 12.0)]
+    static = [
+        {"player_id": "A", "position": "WR", "draft_year": 2023, "draft_pick": 40, "first_season": 2023,
+         "birth_date": date(2000, 1, 1), "forty": 4.5, "ht_in": 72, "wt": 200.0},
+        # latest class, not yet played: included
+        {"player_id": "R", "position": "WR", "draft_year": 2025, "draft_pick": 12, "first_season": None,
+         "birth_date": date(2003, 3, 1), "forty": 4.4, "ht_in": 73, "wt": 205.0},
+        # latest class but another position, and an older unplayed pick: excluded
+        {"player_id": "T", "position": "TE", "draft_year": 2025, "draft_pick": 50, "first_season": None,
+         "birth_date": date(2003, 1, 1), "forty": None, "ht_in": 77, "wt": 250.0},
+        {"player_id": "U", "position": "WR", "draft_year": 2024, "draft_pick": 200, "first_season": None,
+         "birth_date": date(2001, 1, 1), "forty": None, "ht_in": 70, "wt": 180.0},
+    ]
+    t = tables(weeks, {"A": {2023: 23.0, 2024: 24.0}}, static)
+    d = build_model_data(t, "WR", 2006)
+    keys = d.ps_keys.to_dicts()
+    assert {"player_id": "R", "season": 2025, "games_played": 0} in keys
+    assert {k["player_id"] for k in keys} == {"A", "R"}
+    r = d.player_ids.index("R")
+    assert d.pre_window[r] == 0
+    assert d.ps_age_c[d.ps_player == r][0] == pytest.approx(22.5 - 26.0, abs=0.01)
+    assert not (d.obs_ps == np.flatnonzero(d.ps_player == r)[0]).any()
+    assert build_model_data(t, "WR", 2006, unplayed_rookies=False).player_ids == ("A",)
 
 
 def test_empty_position_raises(small):

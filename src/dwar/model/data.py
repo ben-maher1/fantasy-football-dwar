@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 import polars as pl
 
-from dwar.features.player_tables import PlayerTables
+from dwar.features.player_tables import DAYS_PER_YEAR, PlayerTables
 
 log = logging.getLogger(__name__)
 
@@ -58,26 +58,52 @@ class ModelData:
         return len(self.player_ids)
 
 
+FLAG_MERGE_SHARE = 0.01  # flags differing on fewer than this share of rows are merged
+
+
 def standardize_with_flags(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataFrame:
     """z-score each column over its non-null values; nulls become 0 with a
     missing flag so a missing combine drill is neither dropped nor mistaken
-    for an average one. Flags that are always 0 are dropped, and identical
-    flags are merged (height and weight are missing together), since
-    duplicate columns leave their coefficients unidentified."""
-    zs, flags = [], {}
+    for an average one. Flags that are always 0 are dropped, and flags that
+    are identical or nearly so (height and weight are missing together, bar
+    a player or two) are merged into one that is set if either is, since
+    near-duplicate columns leave their coefficients barely identified and
+    the sampler mixes poorly on them."""
+    zs, flags = [], []  # flags: [names, missing array]
     for c in columns:
         x = pl.col(c).cast(pl.Float64)
         sd = df[c].cast(pl.Float64).std()
         zs.append(((x - x.mean()) / (sd if sd and sd > 0 else 1.0)).fill_null(0.0).alias(f"{c}_z"))
-        missing = df[c].is_null()
+        missing = df[c].is_null().to_numpy()
         if not missing.any():
             continue
-        key = tuple(missing.to_list())
-        flags[key] = [*flags.get(key, []), c]
-    flag_cols = [
-        pl.Series("_".join(names) + "_missing", key, dtype=pl.Float64) for key, names in flags.items()
-    ]
+        for flag in flags:
+            if (flag[1] != missing).mean() < FLAG_MERGE_SHARE:
+                flag[0].append(c)
+                flag[1] = flag[1] | missing
+                break
+        else:
+            flags.append([[c], missing])
+    flag_cols = [pl.Series("_".join(names) + "_missing", key, dtype=pl.Float64) for names, key in flags]
     return df.select(zs).with_columns(flag_cols)
+
+
+def _unplayed_rookie_seasons(tables: PlayerTables, position: str, first_season: int) -> pl.DataFrame:
+    static = tables.player_static
+    empty = pl.DataFrame(schema={"player_id": pl.String, "season": pl.Int32, "games_played": pl.UInt32, "age_sept1": pl.Float64})
+    if "draft_year" not in static.columns or static["draft_year"].drop_nulls().is_empty():
+        return empty
+    latest = static["draft_year"].max()
+    if latest < first_season:
+        return empty
+    return static.filter(
+        (pl.col("draft_year") == latest) & (pl.col("position") == position) & pl.col("first_season").is_null()
+    ).select(
+        "player_id",
+        season=pl.lit(latest).cast(pl.Int32),
+        games_played=pl.lit(0).cast(pl.UInt32),
+        age_sept1=((pl.date(latest, 9, 1) - pl.col("birth_date")).dt.total_days() / DAYS_PER_YEAR).round(3),
+    )
 
 
 def build_model_data(
@@ -86,10 +112,15 @@ def build_model_data(
     first_season: int = 2006,
     season_covariates: pl.DataFrame | None = None,
     prospect_covariates: pl.DataFrame | None = None,
+    unplayed_rookies: bool = True,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
-    covariate. Both slots are empty in v1 and filled by later steps."""
+    covariate. Both slots are empty in v1 and filled by later steps.
+
+    With `unplayed_rookies`, players from the latest draft class who have not
+    played get a rookie-season row with no games, so the model draws their
+    talent from the rookie prior and they can be valued before Week 1."""
     weeks = tables.player_weeks.filter(
         (pl.col("position") == position) & (pl.col("season") >= first_season)
     )
@@ -98,6 +129,8 @@ def build_model_data(
         .agg(games_played=pl.len())
         .join(tables.player_seasons.select("player_id", "season", "age_sept1"), on=["player_id", "season"], how="left")
     )
+    if unplayed_rookies:
+        ps = pl.concat([ps, _unplayed_rookie_seasons(tables, position, first_season)], how="vertical_relaxed")
     no_age = ps.filter(pl.col("age_sept1").is_null())["player_id"].unique()
     if len(no_age):
         log.warning("dropping %d %s players with no birth date", len(no_age), position)
