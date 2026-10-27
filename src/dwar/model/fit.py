@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import nutpie
 import polars as pl
+import xarray as xr
 from xarray import DataTree
 
 from dwar.config import ModelConfig
@@ -152,3 +153,20 @@ def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: d
     if failures:
         raise failures[0]
     return results
+
+
+def load_fit(d: ModelData, out_dir: Path) -> FitResult | None:
+    """A passing fit previously written by `fit` for `d.position`, or None.
+    `d` must be built from the same tables the fit used."""
+    name = d.position.lower()
+    diag_path, nc_path = out_dir / f"{name}_diagnostics.json", out_dir / f"{name}.nc"
+    if not (diag_path.exists() and nc_path.exists()):
+        return None
+    diag = Diagnostics(**json.loads(diag_path.read_text()))
+    if not diag.passed:
+        return None
+    posterior = xr.open_datatree(nc_path)
+    if posterior["posterior"].sizes.get("player_season") != d.n_ps:
+        raise ValueError(f"saved {d.position} fit in {out_dir} does not match these tables")
+    talent = pl.read_parquet(out_dir / f"{name}_talent.parquet")
+    return FitResult(data=d, posterior=posterior, diagnostics=diag, talent=talent)

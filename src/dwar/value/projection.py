@@ -68,7 +68,7 @@ class PositionDraws:
         return talent_from_center(self.likelihood, center, params, np)
 
 
-def project_talent(
+def project_latent(
     draws: PositionDraws,
     ps_idx: np.ndarray,
     last_season: np.ndarray,
@@ -76,12 +76,10 @@ def project_talent(
     seasons: np.ndarray,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """Expected points per game for each player in each of `seasons`.
-
-    `ps_idx`, `last_season`, `last_age` describe each player's latest fitted
-    season. Returns (draws, players, seasons). A season at or before a
-    player's latest one gets that latest season's talent (the projection
-    never looks backward)."""
+    """Latent talent for each player in each of `seasons`, (draws, players,
+    seasons). `ps_idx`, `last_season`, `last_age` describe each player's
+    latest fitted season; a season at or before it keeps that season's
+    latent talent (the projection never looks backward)."""
     latent = draws.latent[:, ps_idx]
     out = np.empty((latent.shape[0], len(ps_idx), len(seasons)))
     prev = last_season.astype(float)
@@ -92,5 +90,21 @@ def project_talent(
         step = draws.tau[:, None] * np.sqrt(ahead) * rng.standard_normal(latent.shape)
         latent = latent + draws.age_effect(age_next) - draws.age_effect(age_prev) + step
         prev = np.maximum(prev, season)
-        out[:, :, j] = np.where(season <= last_season, draws.talent[:, ps_idx], draws.expected_points(latent))
+        out[:, :, j] = latent
     return out
+
+
+def project_talent(
+    draws: PositionDraws,
+    ps_idx: np.ndarray,
+    last_season: np.ndarray,
+    last_age: np.ndarray,
+    seasons: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Expected points per game for each player in each of `seasons`,
+    (draws, players, seasons); see `project_latent`."""
+    latent = project_latent(draws, ps_idx, last_season, last_age, seasons, rng)
+    out = draws.expected_points(latent.reshape(latent.shape[0], -1)).reshape(latent.shape)
+    at_or_before = seasons[None, :] <= last_season[:, None]
+    return np.where(at_or_before[None], draws.talent[:, ps_idx][:, :, None], out)

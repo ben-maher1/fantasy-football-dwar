@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.7",
     "pymc>=6.3",
     "pyyaml>=6.0",
+    "matplotlib>=3.9",
     "scipy>=1.13",
 ]
 

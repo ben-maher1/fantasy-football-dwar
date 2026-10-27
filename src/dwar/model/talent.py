@@ -183,7 +183,7 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
             sigma = pm.HalfNormal("sigma", 2.0)
             nu = pm.Deterministic("nu", 2.0 + pm.Gamma("nu_minus_2", 2.0, 0.1))
             h0 = pm.Normal("h0", 1.0, 1.5)
-            h1 = pm.Normal("h1", 0.0, 1.5)
+            h1 = pm.HalfNormal("h1", 3.0)  # zero weeks get rarer as talent rises
             loc = pm.Deterministic("loc", center, dims="player_season")
             params = {"sigma": sigma, "nu": nu, "h0": h0, "h1": h1, "zero_value": d.zero_week_mean}
             pm.Deterministic("talent", talent_from_center(likelihood, loc, params, pt), dims="player_season")
