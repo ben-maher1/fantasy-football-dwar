@@ -44,7 +44,8 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
     compiled = nutpie.compile_pymc_model(build_talent_model(d, cfg.likelihood))
     s = cfg.sampler
     return nutpie.sample(
-        compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False
+        compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False,
+        save_warmup=False,
     )
 
 
