@@ -99,6 +99,9 @@ class ModelConfig(_Frozen):
     # Weeks below this many plays (attempts + sacks + carries) are left out
     # of a position's talent fit; they still count as games played.
     min_plays: dict[str, int] = {}
+    # Positions whose yearly talent steps are Student-t (mostly small,
+    # occasionally large) instead of normal.
+    heavy_tailed_steps: tuple[str, ...] = ()
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)

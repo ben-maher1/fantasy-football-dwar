@@ -56,3 +56,14 @@ def test_log_scale_draws_recover_latent_from_loc():
     })})
     d = PositionDraws.from_posterior(SimpleNamespace(zero_week_mean=0.0), post, "sqrt_hurdle_log", np.array([0]))
     np.testing.assert_allclose(d.latent[0], [-1.0, 0.5, 1.4])
+
+
+def test_heavy_tailed_steps_project_with_student_t():
+    n = 20_000
+    normal = draws(n, [10.0], tau=1.0)
+    heavy = PositionDraws(**{**normal.__dict__, "nu_step": np.full(n, 3.0)})
+    rng = np.random.default_rng(0)
+    args = (np.array([0]), np.array([2020]), np.array([26.0]), np.array([2021]))
+    a = project_talent(normal, *args, rng)[:, 0, 0] - 10.0
+    b = project_talent(heavy, *args, rng)[:, 0, 0] - 10.0
+    assert np.mean(np.abs(a) > 4) < 0.001 < np.mean(np.abs(b) > 4)

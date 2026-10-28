@@ -3,6 +3,7 @@
     latent[i,s]    = level[i,s] + age_effect(age[i,s]) + season_x @ eta
     age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2
     level[i,s]     = level[i,s-1] + tau*sqrt(gap)*z[i,s]
+    z[i,s]         ~ Normal(0, 1), or StudentT(nu_step, 0, 1) with heavy_steps
     latent[i,first] ~ Normal(prior_mean_i, prior_sd_i)   (before season covariates)
     center[i,s]    = link(latent[i,s])
     fpts[i,s,w]    ~ weekly distribution around center[i,s]
@@ -151,7 +152,7 @@ def _shrunk_coefs(name: str, dim: str, sd: float) -> pt.TensorVariable:
     return pm.Normal(name, 0.0, sd, dims=dim)
 
 
-def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Model:
+def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", heavy_steps: bool = False) -> pm.Model:
     coords = {
         "player": list(d.player_ids),
         "player_season": np.arange(d.n_ps),
@@ -197,7 +198,13 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
         later = np.flatnonzero(~d.ps_is_first)
         steps = start[d.ps_player] - age_effect  # first seasons: level = start - age effect
         if len(later):
-            step_z = pm.Normal("step_z", 0.0, 1.0, shape=len(later))
+            if heavy_steps:
+                # Mostly small steps with an occasional big one; nu_step near
+                # 2 is very heavy-tailed, large nu_step is close to normal.
+                nu_step = pm.Deterministic("nu_step", 2.0 + pm.Gamma("nu_step_minus_2", 2.0, 0.2))
+                step_z = pm.StudentT("step_z", nu=nu_step, mu=0.0, sigma=1.0, shape=len(later))
+            else:
+                step_z = pm.Normal("step_z", 0.0, 1.0, shape=len(later))
             steps = pt.set_subtensor(steps[later], tau * np.sqrt(np.maximum(d.ps_gap[later], 1.0)) * step_z)
         csum = pt.cumsum(steps)
         level = csum - csum[d.ps_start] + steps[d.ps_start]

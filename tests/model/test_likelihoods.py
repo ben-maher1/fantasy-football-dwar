@@ -70,3 +70,14 @@ def test_log_link_makes_a_latent_step_proportional():
         x = np.log(level)
         ratio = link(np.array([x + step]), "sqrt_hurdle_log", lib=np) / link(np.array([x]), "sqrt_hurdle_log", lib=np)
         assert ratio[0] == pytest.approx(np.exp(step))
+
+
+def test_heavy_steps_add_a_step_tail_parameter():
+    from dwar.model.talent import build_talent_model
+
+    from .simulate import simulate
+
+    d = simulate(n_players=30, seed=1, likelihood="sqrt_hurdle_log").data
+    names = lambda m: {v.name for v in m.free_RVs}
+    assert "nu_step_minus_2" in names(build_talent_model(d, "sqrt_hurdle_log", heavy_steps=True))
+    assert "nu_step_minus_2" not in names(build_talent_model(d, "sqrt_hurdle_log"))

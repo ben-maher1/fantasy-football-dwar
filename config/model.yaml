@@ -7,6 +7,7 @@ likelihood_by_position:
   QB: sqrt_hurdle_log    # proportional drift; additive drift made QB forecasts too wide (step 5)
 min_plays:               # weeks below this many plays (attempts + sacks + carries) are not fit
   QB: 15                 # drops injury exits and mop-up relief (about 14% of QB weeks)
+heavy_tailed_steps: [QB]  # QB talent: mostly stable, occasional big jumps (new team, coach, injury)
 sampler:
   chains: 4
   tune: 1000

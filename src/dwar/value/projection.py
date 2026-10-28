@@ -34,6 +34,7 @@ class PositionDraws:
     tau: np.ndarray
     params: dict[str, np.ndarray]  # likelihood parameters, (draws,) each
     zero_value: float
+    nu_step: np.ndarray | None = None  # (draws,) Student-t steps when fitted with heavy tails
 
     @classmethod
     def from_posterior(
@@ -58,6 +59,7 @@ class PositionDraws:
             tau=take("tau"),
             params={n: take(n) for n in LIKELIHOOD_PARAMS[likelihood]},
             zero_value=d.zero_week_mean,
+            nu_step=take("nu_step") if "nu_step" in posterior["posterior"] else None,
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
@@ -89,7 +91,11 @@ def project_latent(
         ahead = np.maximum(season - prev, 0.0)  # seasons since the last projected one
         age_prev = last_age + (prev - last_season)
         age_next = last_age + np.maximum(season - last_season, 0)
-        step = draws.tau[:, None] * np.sqrt(ahead) * rng.standard_normal(latent.shape)
+        z = (
+            rng.standard_t(draws.nu_step[:, None], latent.shape) if draws.nu_step is not None
+            else rng.standard_normal(latent.shape)
+        )
+        step = draws.tau[:, None] * np.sqrt(ahead) * z
         latent = latent + draws.age_effect(age_next) - draws.age_effect(age_prev) + step
         prev = np.maximum(prev, season)
         out[:, :, j] = latent
