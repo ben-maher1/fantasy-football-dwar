@@ -159,7 +159,11 @@ def build_model_data(
     )
     # Explicit sorts after every join: polars does not promise join order, and
     # both alignment and bit-for-bit reproducible sampling depend on it.
-    observed = weeks.filter(pl.col("plays") >= min_plays) if min_plays else weeks
+    observed = weeks
+    if min_plays:
+        if "plays" not in weeks.columns or weeks["plays"].null_count() == weeks.height:
+            raise ValueError("min_plays needs weekly play counts, and these tables have none")
+        observed = weeks.filter(pl.col("plays") >= min_plays)
     obs = (
         observed.with_row_index("_row")
         .join(ps.select("player_id", "season", "ps_idx"), on=["player_id", "season"], how="inner")

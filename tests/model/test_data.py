@@ -174,3 +174,8 @@ def test_low_play_weeks_count_as_games_but_are_not_fit():
     # 2011 had only a short relief appearance: still a season with one game, and no data
     assert d.ps_keys["games_played"].to_list() == [2, 1, 1]
     assert build_model_data(t, "QB", 2006, unplayed_rookies=False).y.tolist() == [20.0, 1.0, 2.0, 18.0]
+
+
+def test_min_plays_without_play_counts_fails_loudly(small):
+    with pytest.raises(ValueError, match="play counts"):
+        build_model_data(small, first_season=2006, min_plays=15)

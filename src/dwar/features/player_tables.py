@@ -13,12 +13,11 @@ from pathlib import Path
 import polars as pl
 
 from dwar.config import ScoringConfig, data_dir
-from dwar.features.asof import AsOfSnapshot
+from dwar.features.asof import PLAY_COLUMNS, AsOfSnapshot
 from dwar.features.scoring import fantasy_points
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
 DAYS_PER_YEAR = 365.25
-PLAY_COLUMNS = ("attempts", "sacks_suffered", "carries")  # plays a player was the ball carrier or passer on
 
 
 @dataclass(frozen=True)
@@ -64,9 +63,10 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
     scored = fantasy_points(snap.stats, scoring).select(
         "player_id", "season", "week", "game_id", "gameday", "team", "opponent_team",
         "fpts", "knowable_on", source=pl.lit("stats"),
-        plays=pl.sum_horizontal(
-            [pl.lit(0), *(pl.col(c).fill_null(0) for c in PLAY_COLUMNS if c in snap.stats.columns)]
-        ).cast(pl.Int64),
+        # Null when the stats lack play counts (small test fixtures), so a
+        # play filter fails loudly instead of seeing zeros.
+        plays=pl.sum_horizontal([pl.col(c).fill_null(0) for c in PLAY_COLUMNS]).cast(pl.Int64)
+        if set(PLAY_COLUMNS) <= set(snap.stats.columns) else pl.lit(None, pl.Int64),
     )
     snap_only = (
         snap.snaps.filter(pl.col("offense_snaps") > 0)
