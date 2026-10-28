@@ -15,7 +15,8 @@ season.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import date
 
 import numpy as np
@@ -24,9 +25,11 @@ import polars as pl
 from dwar.config import LeagueFormat, ValueConfig
 from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
+from dwar.model.talent import for_position
 from dwar.value.availability import AvailabilityDraws, fit_availability, season_games
 from dwar.value.projection import PositionDraws, project_talent
 from dwar.value.replacement import replacement_level
+from dwar.value.short_games import ShortGames, short_games
 from dwar.value.wins import team_score_sd, wins_per_game
 
 PERCENTILES = (5, 25, 50, 75, 95)
@@ -79,6 +82,7 @@ class ValueInputs:
     replacement: dict[str, np.ndarray]  # position -> (draws,)
     sigma: float                        # weekly team-score SD
     availability: AvailabilityDraws
+    short: dict[str, ShortGames] = field(default_factory=dict)  # positions with short appearances
 
 
 def replacement_from_fits(
@@ -104,13 +108,16 @@ def replacement_from_fits(
 
 def value_inputs(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
-    fmt: LeagueFormat, cfg: ValueConfig, likelihood: str, rng: np.random.Generator,
+    fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], rng: np.random.Generator,
+    min_plays: Mapping[str, int] | None = None,
 ) -> ValueInputs:
     clock = season_clock(schedules, tables.as_of)
     first = next(iter(fits.values()))
     n_total = first.posterior["posterior"].sizes["chain"] * first.posterior["posterior"].sizes["draw"]
     idx = draw_indices(n_total, cfg.draws)
-    draws = {p: PositionDraws.from_posterior(r.data, r.posterior, likelihood, idx) for p, r in fits.items()}
+    draws = {
+        p: PositionDraws.from_posterior(r.data, r.posterior, for_position(likelihood, p), idx) for p, r in fits.items()
+    }
     recent = clock.complete[-cfg.replacement_seasons:]
     replacement = replacement_from_fits(fits, draws, fmt, recent, cfg.pool_min_games)
     sigma = team_score_sd(
@@ -118,7 +125,11 @@ def value_inputs(
     )
     talent = pl.concat([r.talent.with_columns(position=pl.lit(p)) for p, r in fits.items()])
     availability = fit_availability(talent, tables.player_seasons, schedules, tables.as_of).draw(len(idx), rng)
-    return ValueInputs(clock, draws, replacement, sigma, availability)
+    short = {
+        p: s for p, r in fits.items()
+        if (s := short_games(tables.player_weeks, p, (min_plays or {}).get(p, 0), int(r.data.ps_keys["season"].min())))
+    }
+    return ValueInputs(clock, draws, replacement, sigma, availability, short)
 
 
 def position_dwar(
@@ -147,6 +158,9 @@ def position_dwar(
     av = inputs.availability
     repl = inputs.replacement[position][:, None]
     remaining = np.array([clock.remaining.get(t, clock.remaining_default) for t in latest["team"].to_list()])
+    short = inputs.short.get(position)
+    short_rate = short.rates(latest["player_id"].to_list())[None, :] if short else 0.0
+    short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0
     alive = np.ones(talent.shape[:2])
     total = np.zeros(talent.shape[:2])
     for j, season in enumerate(seasons[1:], start=1):
@@ -157,18 +171,20 @@ def position_dwar(
         alive = np.where(season <= last_season, alive, alive * survives)
         share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng)
         games = share * (remaining if season == clock.current else av.season_games)
-        wins = games * wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
+        full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
+        wins = games * ((1.0 - short_rate) * full_wins + short_rate * short_wins)
         total += fmt.discount ** (season - clock.current) * alive * wins
     return latest, total
 
 
 def dwar_table(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
-    fmt: LeagueFormat, cfg: ValueConfig, likelihood: str, seed: int,
+    fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], seed: int,
+    min_plays: Mapping[str, int] | None = None,
 ) -> tuple[pl.DataFrame, dict]:
     """The DWAR output table and a summary of the inputs behind it."""
     rng = np.random.default_rng(seed)
-    inputs = value_inputs(fits, tables, schedules, fmt, cfg, likelihood, rng)
+    inputs = value_inputs(fits, tables, schedules, fmt, cfg, likelihood, rng, min_plays)
     frames = []
     for p, r in fits.items():
         players, d = position_dwar(p, r, inputs, tables, fmt, cfg, rng)

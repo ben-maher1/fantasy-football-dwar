@@ -10,14 +10,18 @@ actual value falls in it (PIT) for calibration.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 import polars as pl
 from scipy.stats import gaussian_kde
 
+from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
-from dwar.model.talent import link, simulate_weeks
+from dwar.model.talent import for_position, link, simulate_weeks
 from dwar.value.dwar import draw_indices
 from dwar.value.projection import PositionDraws, project_latent
+from dwar.value.short_games import ShortGames, short_games
 
 MIN_GAMES = 4  # player-seasons scored
 
@@ -36,9 +40,11 @@ def kde_log_density(samples: np.ndarray, actual: float) -> float:
 
 def forecast_position(
     r: FitResult, likelihood: str, targets: pl.DataFrame, season: int, n_draws: int, rng: np.random.Generator,
+    short: ShortGames | None = None,
 ) -> pl.DataFrame:
     """Forecasts for `targets` (player_id, games_played, fpts_per_game) at
-    one position. Players the fit does not know get no row."""
+    one position. Players the fit does not know get no row. With `short`,
+    some simulated games are short appearances (see value/short_games.py)."""
     total = r.posterior["posterior"].sizes["chain"] * r.posterior["posterior"].sizes["draw"]
     draws = PositionDraws.from_posterior(r.data, r.posterior, likelihood, draw_indices(total, n_draws))
     latest = (
@@ -58,10 +64,15 @@ def forecast_position(
     center = link(latent, likelihood, lib=np)
     params = {n: v[:, None] for n, v in draws.params.items()} | {"zero_value": draws.zero_value}
     talent = draws.expected_points(latent)
+    rates = short.rates(latest["player_id"].to_list()) if short else np.zeros(latest.height)
+    if short:
+        talent = short.expected(talent, rates[None, :])
     rows = []
     for k, row in enumerate(latest.iter_rows(named=True)):
         g = int(row["games_played_actual"])
         weeks = simulate_weeks(likelihood, np.repeat(center[:, k : k + 1], g, axis=1), params, rng)
+        if short:
+            weeks = short.simulate(weeks, rates[k], rng)
         ppg = weeks.mean(axis=1)
         actual = float(row["fpts_per_game"])
         rows.append({
@@ -77,17 +88,23 @@ def forecast_position(
 
 
 def forecast_season(
-    fits: dict[str, FitResult], likelihood: str, actual: pl.DataFrame, season: int, n_draws: int, seed: int,
+    fits: dict[str, FitResult], likelihood: str | Mapping[str, str], actual: pl.DataFrame, season: int,
+    n_draws: int, seed: int, tables: PlayerTables | None = None, min_plays: Mapping[str, int] | None = None,
 ) -> pl.DataFrame:
     """DWAR forecasts for every scored player-season in `actual` (player_id,
     position, games_played, fpts_per_game for `season`), with a
-    `has_forecast` flag for players no fit knew (counted, not dropped)."""
+    `has_forecast` flag for players no fit knew (counted, not dropped).
+    `tables` (as of the forecast) and `min_plays` add short appearances."""
     rng = np.random.default_rng(seed + season)
     scored = actual.filter((pl.col("season") == season) & (pl.col("games_played") >= MIN_GAMES))
     frames = []
     for position, r in fits.items():
         targets = scored.filter(pl.col("position") == position).select("player_id", "games_played", "fpts_per_game")
-        f = forecast_position(r, likelihood, targets, season, n_draws, rng)
+        short = (
+            short_games(tables.player_weeks, position, (min_plays or {}).get(position, 0), int(r.data.ps_keys["season"].min()))
+            if tables is not None else None
+        )
+        f = forecast_position(r, for_position(likelihood, position), targets, season, n_draws, rng, short)
         if not f.is_empty():
             frames.append(f.with_columns(position=pl.lit(position)))
     forecasts = pl.concat(frames) if frames else pl.DataFrame(schema={"player_id": pl.String, "position": pl.String})

@@ -41,6 +41,8 @@ the comparison.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
@@ -89,6 +91,11 @@ def _check(likelihood: str) -> None:
 def scale_of(likelihood: str) -> str:
     _check(likelihood)
     return {"sqrt_hurdle": "sqrt", "sqrt_hurdle_log": "log"}.get(likelihood, "points")
+
+
+def for_position(likelihood: str | Mapping[str, str], position: str) -> str:
+    """One likelihood for every position, or a position -> likelihood map."""
+    return likelihood if isinstance(likelihood, str) else likelihood[position]
 
 
 def is_hurdle(likelihood: str) -> bool:

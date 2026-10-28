@@ -14,11 +14,14 @@ surviving, mean share of games) from the same training rows.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 import polars as pl
 
 from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
+from dwar.model.talent import for_position
 from dwar.validate.forecast import pit
 from dwar.value.availability import availability_rows, fit_availability, season_games
 from dwar.value.dwar import draw_indices
@@ -28,7 +31,7 @@ CALIBRATION_BINS = (0.0, 0.5, 0.7, 0.8, 0.9, 0.95, 1.0)
 
 
 def availability_forecast(
-    fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame, likelihood: str,
+    fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame, likelihood: str | Mapping[str, str],
     actual: pl.DataFrame, season: int, n_draws: int, seed: int,
 ) -> pl.DataFrame:
     """One row per player who played in `season - 1`: p_survive and
@@ -48,7 +51,9 @@ def availability_forecast(
     frames = []
     for position, r in fits.items():
         total = r.posterior["posterior"].sizes["chain"] * r.posterior["posterior"].sizes["draw"]
-        draws = PositionDraws.from_posterior(r.data, r.posterior, likelihood, draw_indices(total, n_draws))
+        draws = PositionDraws.from_posterior(
+            r.data, r.posterior, for_position(likelihood, position), draw_indices(total, n_draws)
+        )
         prev = (
             r.data.ps_keys.with_row_index("ps_idx")
             .with_columns(age_c=pl.Series(r.data.ps_age_c))

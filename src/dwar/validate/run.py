@@ -44,7 +44,7 @@ def season_results(raw: RawTables, season: int, truth: pl.DataFrame, root: Path)
     actual = truth.filter(pl.col("season") == season).select(
         "player_id", "season", "position", "games_played", "fpts_per_game"
     )
-    dwar = forecast_season(fits, cfg.likelihood, actual, season, FORECAST_DRAWS, cfg.seed)
+    dwar = forecast_season(fits, cfg.likelihoods(), actual, season, FORECAST_DRAWS, cfg.seed, tables, cfg.min_plays)
     base = baseline_forecasts(tables.player_seasons, tables.player_static, dwar.select(actual.columns), season)
     out = dwar.join(base.drop("season", "games_played", "fpts_per_game"), on=["player_id", "position"], how="left")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +60,7 @@ def season_availability(raw: RawTables, season: int, truth: pl.DataFrame, root: 
     cfg = load_model_config()
     tables, fits = fit_season(raw, season, cfg, root)
     schedules = asof_snapshot(raw, tables.as_of).schedules
-    out = availability_forecast(fits, tables, schedules, cfg.likelihood, truth, season, FORECAST_DRAWS, cfg.seed)
+    out = availability_forecast(fits, tables, schedules, cfg.likelihoods(), truth, season, FORECAST_DRAWS, cfg.seed)
     path.parent.mkdir(parents=True, exist_ok=True)
     out.write_parquet(path)
     return out

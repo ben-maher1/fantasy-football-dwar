@@ -2,7 +2,9 @@
 seed: 20261024
 first_season: 2006       # history window for fitting
 positions: [QB, RB, WR, TE]  # one talent fit each
-likelihood: sqrt_hurdle_log  # weekly points distribution and latent scale; see model/talent.py
+likelihood: sqrt_hurdle  # weekly points distribution and latent scale; see model/talent.py
+likelihood_by_position:
+  QB: sqrt_hurdle_log    # proportional drift; additive drift made QB forecasts too wide (step 5)
 min_plays:               # weeks below this many plays (attempts + sacks + carries) are not fit
   QB: 15                 # drops injury exits and mop-up relief (about 14% of QB weeks)
 sampler:

@@ -46,7 +46,7 @@ UNJITTERED = ("beta1", "beta2")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    model = build_talent_model(d, cfg.likelihood)
+    model = build_talent_model(d, cfg.likelihood_for(d.position))
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler
@@ -123,7 +123,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         "seed": cfg.seed,
         "sampler": cfg.sampler.model_dump(),
         "position": d.position,
-        "likelihood": cfg.likelihood,
+        "likelihood": cfg.likelihood_for(d.position),
         "n_obs": d.n_obs,
         "n_player_seasons": d.n_ps,
         "n_players": d.n_players,
@@ -133,7 +133,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         **(meta or {}),
     }
     if diag.passed:
-        diag.extra["posterior_predictive"] = posterior_predictive_check(d, posterior, cfg.likelihood, cfg.seed)
+        diag.extra["posterior_predictive"] = posterior_predictive_check(d, posterior, cfg.likelihood_for(d.position), cfg.seed)
 
     name = d.position.lower()
     (out_dir / f"{name}_diagnostics.json").write_text(json.dumps(diag.to_dict(), indent=2, default=str))

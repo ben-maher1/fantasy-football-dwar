@@ -148,3 +148,16 @@ def test_end_to_end_table(end_to_end):
     assert summary["seasons_valued"][0] == summary["current_season"] and len(summary["seasons_valued"]) == 6
     again, _ = dwar_table(fits, tables, sched, fmt, cfg, "studentt", seed=1)
     assert table.equals(again)  # fixed seed, same table
+
+
+def test_short_games_lower_value(end_to_end):
+    fits, tables, sched, fmt, cfg = end_to_end
+    base, _ = dwar_table(fits, tables, sched, fmt, cfg, "studentt", seed=3)
+    weeks = tables.player_weeks.with_columns(plays=pl.when(pl.col("fpts") < 5).then(0).otherwise(40))
+    t = PlayerTables(tables.as_of, weeks, tables.player_seasons, tables.player_static)
+    short, _ = dwar_table(fits, t, sched, fmt, cfg, "studentt", seed=3, min_plays={"WR": 15})
+    joined = base.join(short, on="player_id", suffix="_short")
+    wr = joined.filter(pl.col("position") == "WR")
+    assert (wr["dwar_mean_short"] <= wr["dwar_mean"] + 1e-9).all() and (wr["dwar_mean_short"] < wr["dwar_mean"]).any()
+    rb = joined.filter(pl.col("position") == "RB")
+    np.testing.assert_allclose(rb["dwar_mean_short"], rb["dwar_mean"])

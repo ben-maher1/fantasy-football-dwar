@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 
 from dwar.features.asof import RawTables
+from dwar.features.player_tables import PlayerTables
 from dwar.validate.backtest import backtest_as_of
 from dwar.validate.forecast import forecast_season
 
@@ -30,6 +31,16 @@ def test_forecasts_for_known_players_and_flags_the_rest():
     assert known_rows["pit"].is_between(0, 1).all() and known_rows["log_score"].is_finite().all()
     assert (known_rows["pred_sd"] > 0).all()
     assert known_rows["seasons_since_data"].is_in([1, 2]).all()
+
+
+    # Short appearances (here every week under 5 points) pull forecasts down.
+    weeks = sim.tables.player_weeks.with_columns(
+        position=pl.lit("WR"), plays=pl.when(pl.col("fpts") < 5).then(0).otherwise(40)
+    )
+    tables = PlayerTables(sim.tables.as_of, weeks, sim.tables.player_seasons, sim.tables.player_static)
+    s = forecast_season({"WR": fit}, "studentt", actual, last + 1, n_draws=100, seed=1, tables=tables,
+                        min_plays={"WR": 15}).filter(pl.col("has_forecast"))
+    assert (s["talent_mean"] < known_rows["talent_mean"]).all()
 
 
 def test_backtest_as_of_is_the_day_before_kickoff():

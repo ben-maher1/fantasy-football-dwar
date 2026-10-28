@@ -49,7 +49,9 @@ def run(as_of: date, format_name: str, root: Path | None = None, raw: RawTables 
         (out / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, default=str))
         raise
 
-    table, summary = dwar_table(fits, tables, snap.schedules, fmt, value_cfg, model_cfg.likelihood, model_cfg.seed)
+    table, summary = dwar_table(
+        fits, tables, snap.schedules, fmt, value_cfg, model_cfg.likelihoods(), model_cfg.seed, model_cfg.min_plays
+    )
     path = out / "dwar.parquet"
     table.write_parquet(path)
     diagnostics.update(
