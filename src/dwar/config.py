@@ -93,7 +93,10 @@ class ModelConfig(_Frozen):
     seed: int
     first_season: int
     positions: tuple[str, ...]
-    likelihood: Literal["sqrt_hurdle", "studentt"]
+    likelihood: Literal["sqrt_hurdle", "sqrt_hurdle_log", "studentt"]
+    # Weeks below this many plays (attempts + sacks + carries) are left out
+    # of a position's talent fit; they still count as games played.
+    min_plays: dict[str, int] = {}
     sampler: SamplerSettings
     diagnostics: DiagnosticThresholds
 

@@ -60,7 +60,7 @@ def fit_season(raw: RawTables, season: int, cfg: ModelConfig, root: Path) -> tup
     meta = {"as_of": tables.as_of.isoformat(), "scoring": SCORING, "backtest_season": season}
     fits = {}
     for position in cfg.positions:
-        d = build_model_data(tables, position, cfg.first_season)
+        d = build_model_data(tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0))
         cached = load_fit(d, out)
         if cached is not None:
             fits[position] = cached

@@ -161,3 +161,16 @@ def test_unplayed_latest_class_rookie_gets_a_prior_only_season():
 def test_empty_position_raises(small):
     with pytest.raises(ValueError, match="no TE games"):
         build_model_data(small, position="TE")
+
+
+def test_low_play_weeks_count_as_games_but_are_not_fit():
+    weeks = [("A", 2010, "QB", 20.0), ("A", 2010, "QB", 1.0), ("A", 2011, "QB", 2.0), ("A", 2012, "QB", 18.0)]
+    t = tables(weeks, {"A": {2010: 22.0, 2011: 23.0, 2012: 24.0}},
+               [{"player_id": "A", "draft_pick": 1, "first_season": 2010, "forty": None, "ht_in": 75, "wt": 220.0}])
+    t = PlayerTables(t.as_of, t.player_weeks.with_columns(plays=pl.Series([40, 3, 5, 38])), t.player_seasons, t.player_static)
+    d = build_model_data(t, "QB", 2006, unplayed_rookies=False, min_plays=15)
+    assert d.y.tolist() == [20.0, 18.0]
+    assert d.obs_ps.tolist() == [0, 2]
+    # 2011 had only a short relief appearance: still a season with one game, and no data
+    assert d.ps_keys["games_played"].to_list() == [2, 1, 1]
+    assert build_model_data(t, "QB", 2006, unplayed_rookies=False).y.tolist() == [20.0, 1.0, 2.0, 18.0]

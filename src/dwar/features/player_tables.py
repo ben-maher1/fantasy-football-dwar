@@ -18,6 +18,7 @@ from dwar.features.scoring import fantasy_points
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
 DAYS_PER_YEAR = 365.25
+PLAY_COLUMNS = ("attempts", "sacks_suffered", "carries")  # plays a player was the ball carrier or passer on
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,9 @@ def _season_positions(snap: AsOfSnapshot, pairs: pl.DataFrame) -> pl.DataFrame:
 def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
     """One row per skill player per regular-season game played.
 
+    `plays` counts the player's own pass attempts, sacks taken, and
+    carries, a proxy for snaps that exists for every season.
+
     A game played is a row in player_stats, or (2013 on) a game with offense
     snaps but no stat row, which scores zero. Without the latter, a receiver
     who played without a target would drop out and inflate points per game.
@@ -60,13 +64,16 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
     scored = fantasy_points(snap.stats, scoring).select(
         "player_id", "season", "week", "game_id", "gameday", "team", "opponent_team",
         "fpts", "knowable_on", source=pl.lit("stats"),
+        plays=pl.sum_horizontal(
+            [pl.lit(0), *(pl.col(c).fill_null(0) for c in PLAY_COLUMNS if c in snap.stats.columns)]
+        ).cast(pl.Int64),
     )
     snap_only = (
         snap.snaps.filter(pl.col("offense_snaps") > 0)
         .join(scored.select("player_id", "game_id"), on=["player_id", "game_id"], how="anti")
         .select(
             "player_id", "season", "week", "game_id", "gameday", "team", "opponent_team",
-            fpts=pl.lit(0.0), knowable_on="knowable_on", source=pl.lit("snaps_only"),
+            fpts=pl.lit(0.0), knowable_on="knowable_on", source=pl.lit("snaps_only"), plays=pl.lit(0, pl.Int64),
         )
     )
     weeks = pl.concat([scored, snap_only], how="vertical_relaxed")

@@ -23,7 +23,7 @@ from dwar.config import ModelConfig
 from dwar.features.player_tables import PlayerTables
 from dwar.model.data import ModelData, build_model_data
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
-from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, simulate_weeks
+from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, is_hurdle, simulate_weeks
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +40,15 @@ class FitResult:
     talent: pl.DataFrame
 
 
+# Started at zero instead of a random point: with a log-scale latent, a
+# random age-curve start (beta2 near +-2 at age 41) puts exp() past overflow.
+UNJITTERED = ("beta1", "beta2")
+
+
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    compiled = nutpie.compile_pymc_model(build_talent_model(d, cfg.likelihood))
+    model = build_talent_model(d, cfg.likelihood)
+    jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
+    compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler
     return nutpie.sample(
         compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False,
@@ -83,7 +90,7 @@ def posterior_predictive_check(d: ModelData, posterior: DataTree, likelihood: st
     statistics over simulated seasons. `fits` is true when observed falls
     inside that range."""
     rng = np.random.default_rng(seed)
-    talent = _draws(posterior, "loc" if likelihood == "sqrt_hurdle" else "talent")
+    talent = _draws(posterior, "loc" if is_hurdle(likelihood) else "talent")
     params = {n: _draws(posterior, n) for n in LIKELIHOOD_PARAMS[likelihood]}
     picks = rng.choice(len(talent), size=min(PPC_DRAWS, len(talent)), replace=False)
     sims = np.stack([
@@ -146,7 +153,7 @@ def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: d
     failure after the rest have run (the run is failed as a whole)."""
     results, failures = {}, []
     for position in cfg.positions:
-        d = build_model_data(tables, position, cfg.first_season)
+        d = build_model_data(tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0))
         try:
             results[position] = fit(d, cfg, out_dir, meta)
         except FitFailed as e:

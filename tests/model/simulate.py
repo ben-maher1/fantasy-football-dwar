@@ -16,7 +16,7 @@ from dwar.config import load_model_config
 from dwar.model.talent import LIKELIHOOD_PARAMS, link, scale_of, simulate_weeks, talent_from_center
 
 # Latent truth on each likelihood's latent scale (points, or sqrt(points)
-# for the sqrt likelihoods, where 3.0 is about 9 ppg). The sqrt values sit
+# for sqrt_hurdle, log(loc) for sqrt_hurdle_log, where 3.0 is about 9 ppg). The sqrt values sit
 # near the real-WR posterior medians.
 LATENT_TRUTH = {
     "points": {
@@ -27,15 +27,21 @@ LATENT_TRUTH = {
         "alpha0": 2.6, "alpha_pick": -0.5, "alpha_undrafted": -0.2, "sigma_rookie": 0.5,
         "mu_vet": 3.0, "sigma_vet": 0.7, "tau": 0.4, "beta1": 0.03, "beta2": -0.02,
     },
+    # log(loc): about the sqrt values above, relative to a loc near 3.
+    "log": {
+        "alpha0": 0.95, "alpha_pick": -0.17, "alpha_undrafted": -0.07, "sigma_rookie": 0.18,
+        "mu_vet": 1.1, "sigma_vet": 0.25, "tau": 0.13, "beta1": 0.01, "beta2": -0.007,
+    },
 }
 LIKELIHOOD_TRUTH = {
     "sqrt_hurdle": {"sigma": 1.0, "nu": 20.0, "h0": 2.5, "h1": 2.0},
+    "sqrt_hurdle_log": {"sigma": 1.0, "nu": 20.0, "h0": 2.5, "h1": 2.0},
     "studentt": {"sigma": 5.0, "nu": 5.0},
 }
 # Prospect covariates: faster 40 helps; the rest have no effect.
-TRUE_GAMMA = {"points": {"forty_z": -0.8}, "sqrt": {"forty_z": -0.2}}
+TRUE_GAMMA = {"points": {"forty_z": -0.8}, "sqrt": {"forty_z": -0.2}, "log": {"forty_z": -0.07}}
 # A season covariate's true coefficient, for the covariate-slot test.
-SEASON_EFFECT = {"points": 1.5, "sqrt": 0.4}
+SEASON_EFFECT = {"points": 1.5, "sqrt": 0.4, "log": 0.13}
 FIRST_SEASON = 2006
 
 

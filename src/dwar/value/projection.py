@@ -45,6 +45,8 @@ class PositionDraws:
 
         if scale_of(likelihood) == "sqrt":
             latent = inverse_softplus(take("loc"))
+        elif scale_of(likelihood) == "log":
+            latent = np.log(take("loc"))
         else:
             latent = take("talent")
         return cls(
