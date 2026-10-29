@@ -114,6 +114,10 @@ class ModelConfig(_Frozen):
     diagnostics: DiagnosticThresholds
 
 
+def uses_situation(cfg: ModelConfig) -> bool:
+    return any(cfg.situation_level.values()) or any(cfg.situation_range.values())
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one

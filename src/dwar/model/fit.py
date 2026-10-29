@@ -21,6 +21,7 @@ from xarray import DataTree
 
 from dwar.config import ModelConfig
 from dwar.features.player_tables import PlayerTables
+from dwar.features.situation import Covariates
 from dwar.model.data import ModelData, build_model_data
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
 from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, is_hurdle, simulate_weeks
@@ -147,13 +148,28 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
     return FitResult(data=d, posterior=posterior, diagnostics=diag, talent=talent)
 
 
-def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None) -> dict[str, FitResult]:
+def position_data(
+    tables: PlayerTables, position: str, cfg: ModelConfig, cov: dict[str, Covariates] | None = None,
+) -> ModelData:
+    """One position's model data, with its situation factors if any."""
+    c = (cov or {}).get(position)
+    return build_model_data(
+        tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0),
+        season_covariates=c.level if c is not None and c.level.width > 2 else None,
+        season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
+    )
+
+
+def fit_positions(
+    tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None,
+    cov: dict[str, Covariates] | None = None,
+) -> dict[str, FitResult]:
     """Fit every configured position. All positions are attempted so each
     writes its diagnostics; if any fails, raises FitFailed for the first
     failure after the rest have run (the run is failed as a whole)."""
     results, failures = {}, []
     for position in cfg.positions:
-        d = build_model_data(tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0))
+        d = position_data(tables, position, cfg, cov)
         try:
             results[position] = fit(d, cfg, out_dir, meta)
         except FitFailed as e:

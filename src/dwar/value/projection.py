@@ -148,3 +148,46 @@ def situation_effects(
         v = np.where(ahead[:, None], range_next, 0.0)
         vol = np.exp(v @ draws.kappa.T).T
     return shift, vol
+
+
+def persistence(d: ModelData) -> np.ndarray:
+    """Year-to-year correlation of each level factor within a player
+    (consecutive seasons), floored at 0: how far a known situation carries
+    into the following season."""
+    k = d.season_x.shape[1]
+    pairs = np.flatnonzero(~d.ps_is_first & (d.ps_gap == 1))
+    if not k or len(pairs) < 3:
+        return np.zeros(k)
+    now, before = d.season_x[pairs], d.season_x[pairs - 1]
+    rho = np.array([np.corrcoef(now[:, j], before[:, j])[0, 1] if now[:, j].std() and before[:, j].std() else 0.0
+                    for j in range(k)])
+    return np.clip(np.nan_to_num(rho), 0.0, 1.0)
+
+
+def future_situation(
+    draws: PositionDraws, d: ModelData, ps_idx: np.ndarray, last_season: np.ndarray, seasons: np.ndarray,
+    level_next: np.ndarray | None, range_next: np.ndarray | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """`shift` and `vol` (draws, players, seasons) for multi-season projection.
+    The season after a player's latest fitted one uses his known situation
+    (`level_next`, `range_next`); later seasons let level factors fade toward
+    the position average at their historical persistence, and scale steps by
+    the average range effect over the fit's later seasons (moves happen at
+    the historical rate without assuming any one)."""
+    n_draws, n_players = draws.latent.shape[0], len(ps_idx)
+    ahead = seasons[None, :] - last_season[:, None]  # (players, seasons); 1 = next season
+    shift = vol = None
+    if draws.eta is not None and level_next is not None:
+        rho = persistence(d)
+        k = np.maximum(ahead - 1, 0)[:, :, None]
+        level = level_next[:, None, :] * rho[None, None, :] ** k  # (players, seasons, factors)
+        delta = np.where((ahead > 0)[:, :, None], level - d.season_x[ps_idx][:, None, :], 0.0)
+        shift = np.einsum("psf,df->dps", delta, draws.eta)
+    if draws.kappa is not None and range_next is not None:
+        later = ~d.ps_is_first
+        typical = np.exp(d.season_vol_x[later] @ draws.kappa.T).mean(axis=0) if later.any() else np.ones(n_draws)
+        known = np.exp(range_next @ draws.kappa.T).T  # (draws, players)
+        vol = np.where(ahead[None] == 1, known[:, :, None], typical[:, None, None])
+        vol = np.where(ahead[None] <= 0, 1.0, vol)
+        vol = np.broadcast_to(vol, (n_draws, n_players, len(seasons)))
+    return shift, vol

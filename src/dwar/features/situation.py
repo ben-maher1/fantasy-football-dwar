@@ -450,3 +450,21 @@ def covariates(
     lvl = t.select(*keys, *[((pl.col(c) - center[c][0]) / center[c][1]).fill_null(0.0).fill_nan(0.0).alias(c) for c in level])
     rng = t.select(*keys, *[pl.col(c).fill_null(0.0).cast(pl.Float64) for c in range_])
     return Covariates(level=lvl, range=rng, center=center)
+
+
+def model_covariates(
+    src: Sources, snap: AsOfSnapshot, tables: PlayerTables, first_season: int,
+    level: dict[str, tuple[str, ...]], range_: dict[str, tuple[str, ...]], upcoming: tuple[int, ...],
+) -> dict[str, Covariates]:
+    """Each position's factors for its fit rows (every played season from
+    `first_season`, plus unplayed rookies) and for each `upcoming` season
+    of every known player, standardized on the played rows."""
+    played = tables.player_seasons.filter(pl.col("season") >= first_season).select("player_id", "season", "position")
+    ahead = [tables.player_static.select("player_id", "position", season=pl.lit(s, pl.Int32)) for s in upcoming]
+    keys = pl.concat([played, *[a.select(played.columns) for a in ahead]], how="vertical_relaxed").unique(
+        ["player_id", "season"], keep="first", maintain_order=True
+    )
+    table = situation_table(src, snap, tables, keys)
+    reference = played.select("player_id", "season")
+    positions = sorted(set(level) | set(range_))
+    return {p: covariates(table, p, reference, level.get(p, ()), range_.get(p, ())) for p in positions}

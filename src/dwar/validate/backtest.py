@@ -17,13 +17,12 @@ from pathlib import Path
 
 import polars as pl
 
-from dwar.config import ModelConfig, load_scoring
+from dwar.config import ModelConfig, load_scoring, uses_situation
 from dwar.features.asof import REGULAR_SEASON, RawTables, asof_snapshot
 from dwar.features.player_tables import PlayerTables, build_player_tables
-from dwar.features.situation import Covariates, SituationRaw, Sources, covariates, prepare, situation_table
-from dwar.model.data import ModelData, build_model_data
+from dwar.features.situation import Covariates, SituationRaw, Sources, model_covariates, prepare
 from dwar.model.diagnostics import FitFailed
-from dwar.model.fit import FitResult, fit, load_fit
+from dwar.model.fit import FitResult, fit, load_fit, position_data
 
 log = logging.getLogger(__name__)
 
@@ -52,37 +51,15 @@ def situation_sources() -> Sources:
     return prepare(SituationRaw.from_cache())
 
 
-def uses_situation(cfg: ModelConfig) -> bool:
-    return any(cfg.situation_level.values()) or any(cfg.situation_range.values())
-
-
 def season_covariates(
     raw: RawTables, tables: PlayerTables, season: int, cfg: ModelConfig, src: Sources | None = None,
 ) -> dict[str, Covariates]:
-    """Each position's situation factors for its fit rows (seasons before
-    `season`, plus unplayed rookies) and for `season` itself, standardized
-    on the fit rows."""
+    """Each position's situation factors for its fit rows and for `season`."""
     if not uses_situation(cfg):
         return {}
-    src = src or situation_sources()
-    snap = asof_snapshot(raw, tables.as_of)
-    played = tables.player_seasons.filter(pl.col("season") >= cfg.first_season).select("player_id", "season", "position")
-    upcoming = tables.player_static.select("player_id", "position", season=pl.lit(season, pl.Int32))
-    keys = pl.concat([played, upcoming.select(played.columns)], how="vertical_relaxed").unique(["player_id", "season"])
-    table = situation_table(src, snap, tables, keys)
-    reference = played.filter(pl.col("season") < season).select("player_id", "season")
-    return {
-        p: covariates(table, p, reference, cfg.situation_level.get(p, ()), cfg.situation_range.get(p, ()))
-        for p in cfg.positions
-    }
-
-
-def position_data(tables: PlayerTables, position: str, cfg: ModelConfig, cov: dict[str, Covariates]) -> ModelData:
-    c = cov.get(position)
-    return build_model_data(
-        tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0),
-        season_covariates=c.level if c is not None and c.level.width > 2 else None,
-        season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
+    return model_covariates(
+        src or situation_sources(), asof_snapshot(raw, tables.as_of), tables, cfg.first_season,
+        cfg.situation_level, cfg.situation_range, (season,),
     )
 
 

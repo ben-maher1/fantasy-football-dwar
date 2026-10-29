@@ -86,3 +86,27 @@ def test_range_factor_scales_the_step():
     vol = np.full((50_000, 1, 1), 1.5)
     out = project_latent(d, np.array([0]), np.array([2025]), np.array([26.0]), np.array([2026]), rng, None, vol)
     np.testing.assert_allclose(out[:, 0, 0].var(), (2.0 * 1.5) ** 2, rtol=0.03)
+
+
+def test_future_situation_fades_and_uses_typical_moves():
+    from types import SimpleNamespace
+
+    from dwar.value.projection import future_situation
+
+    d = draws(2, [10.0])
+    d = PositionDraws(**{**d.__dict__, "eta": np.full((2, 1), 1.0), "kappa": np.full((2, 1), np.log(2.0))})
+    # Two players with two consecutive seasons each.
+    x = np.array([[1.0], [0.0], [-1.0], [0.0]])
+    data = SimpleNamespace(
+        season_x=x, ps_is_first=np.array([True, False, True, False]), ps_gap=np.array([0, 1, 0, 1]),
+        season_vol_x=np.array([[0.0], [1.0], [0.0], [0.0]]),
+    )
+    shift, vol = future_situation(d, data, np.array([1]), np.array([2025]), np.array([2025, 2026, 2027]),
+                                  np.array([[2.0]]), np.array([[1.0]]))
+    from dwar.value.projection import persistence
+
+    rho = persistence(data)
+    assert 0.0 <= rho[0] <= 1.0
+    np.testing.assert_allclose(shift[0, 0], [0.0, 2.0, 2.0 * rho[0]])
+    # Typical step scale over the later seasons: mean of exp(0) and exp(log 2).
+    np.testing.assert_allclose(vol[0, 0], [1.0, 2.0, 1.5])

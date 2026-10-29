@@ -14,7 +14,7 @@ def test_failed_fit_writes_only_failed_diagnostics(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "asof_snapshot", lambda raw, as_of: SimpleNamespace(schedules=None))
     monkeypatch.setattr(pipeline, "build_player_tables", lambda snap, scoring: None)
 
-    def failing(tables, cfg, out_dir, meta):
+    def failing(tables, cfg, out_dir, meta, cov=None):
         out_dir.mkdir(parents=True)
         diag = Diagnostics(False, ["2 divergences"], 2, 1.0, "", 1e3, "", 1e3, "")
         (out_dir / "rb_diagnostics.json").write_text(json.dumps(diag.to_dict()))
