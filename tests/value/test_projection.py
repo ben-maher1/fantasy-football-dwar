@@ -56,3 +56,33 @@ def test_log_scale_draws_recover_latent_from_loc():
     })})
     d = PositionDraws.from_posterior(SimpleNamespace(zero_week_mean=0.0), post, "sqrt_hurdle_log", np.array([0]))
     np.testing.assert_allclose(d.latent[0], [-1.0, 0.5, 1.4])
+
+
+def test_situation_shift_applies_to_its_season_only():
+    """A better situation next season adds its effect to that season, and the
+    walk itself is not moved by it."""
+    from types import SimpleNamespace
+
+    from dwar.value.projection import project_latent, situation_effects
+
+    rng = np.random.default_rng(0)
+    d = draws(4, [10.0, 8.0])
+    d = PositionDraws(**{**d.__dict__, "eta": np.full((4, 1), 2.0), "kappa": np.full((4, 1), np.log(3.0))})
+    data = SimpleNamespace(season_x=np.array([[0.5], [1.0]]))
+    last = np.array([2025, 2026])  # the second player already has a 2026 row
+    shift, vol = situation_effects(d, data, np.array([0, 1]), last, 2026, np.array([[1.5], [9.0]]), np.array([[1.0], [1.0]]))
+    np.testing.assert_allclose(shift, [[2.0, 0.0]] * 4)  # (1.5 - 0.5) * 2; none for the second player
+    np.testing.assert_allclose(vol, [[3.0, 1.0]] * 4)
+    out = project_latent(d, np.array([0, 1]), last, np.array([26.0, 26.0]), np.array([2026, 2027]), rng,
+                         np.stack([shift, np.zeros_like(shift)], axis=-1), None)
+    np.testing.assert_allclose(out[:, 0, :], [[12.0, 10.0]] * 4)
+
+
+def test_range_factor_scales_the_step():
+    from dwar.value.projection import project_latent
+
+    rng = np.random.default_rng(2)
+    d = draws(50_000, [10.0], tau=2.0)
+    vol = np.full((50_000, 1, 1), 1.5)
+    out = project_latent(d, np.array([0]), np.array([2025]), np.array([26.0]), np.array([2026]), rng, None, vol)
+    np.testing.assert_allclose(out[:, 0, 0].var(), (2.0 * 1.5) ** 2, rtol=0.03)

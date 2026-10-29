@@ -2,11 +2,16 @@
 
     latent[i,s]    = level[i,s] + age_effect(age[i,s]) + season_x @ eta
     age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2
-    level[i,s]     = level[i,s-1] + tau*sqrt(gap)*z[i,s]
+    level[i,s]     = level[i,s-1] + tau*exp(season_vol_x @ kappa)*sqrt(gap)*z[i,s]
     latent[i,first] ~ Normal(prior_mean_i, prior_sd_i)   (before season covariates)
     center[i,s]    = link(latent[i,s])
     fpts[i,s,w]    ~ weekly distribution around center[i,s]
     talent[i,s]    = expected weekly points under that distribution
+
+`season_x` holds level factors (situation: QB quality, scheme, target
+competition) and `season_vol_x` holds 0/1 range factors (changed teams, new
+play-caller, new QB) that make that season's step larger: a changed
+situation is a less predictable one. Both slots may be empty.
 
 The prior is placed on the first season's latent talent, not its level, so
 the prior means (rookie and veteran) are scoring rates at the age the player
@@ -51,6 +56,7 @@ from dwar.model.data import ModelData
 
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
+KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
 SQRT_PIVOT = 3.0  # sqrt-scale location (about 9 ppg) at which the zero-week log-odds are h0
 
 # Global parameters checked by the parameter-recovery test.
@@ -158,6 +164,7 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
         "obs": np.arange(d.n_obs),
         "prospect_cov": list(d.prospect_x_names),
         "season_cov": list(d.season_x_names),
+        "season_vol_cov": list(d.season_vol_x_names),
     }
     pr = PRIORS[scale_of(likelihood)]
     with pm.Model(coords=coords) as model:
@@ -198,7 +205,11 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
         steps = start[d.ps_player] - age_effect  # first seasons: level = start - age effect
         if len(later):
             step_z = pm.Normal("step_z", 0.0, 1.0, shape=len(later))
-            steps = pt.set_subtensor(steps[later], tau * np.sqrt(np.maximum(d.ps_gap[later], 1.0)) * step_z)
+            scale = tau * np.sqrt(np.maximum(d.ps_gap[later], 1.0))
+            if d.season_vol_x.shape[1]:
+                kappa = pm.Normal("kappa", 0.0, KAPPA_SD, dims="season_vol_cov")
+                scale = scale * pt.exp(pt.dot(d.season_vol_x[later], kappa))
+            steps = pt.set_subtensor(steps[later], scale * step_z)
         csum = pt.cumsum(steps)
         level = csum - csum[d.ps_start] + steps[d.ps_start]
 

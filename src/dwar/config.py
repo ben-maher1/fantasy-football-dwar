@@ -99,6 +99,11 @@ class ModelConfig(_Frozen):
     # Weeks below this many plays (attempts + sacks + carries) are left out
     # of a position's talent fit; they still count as games played.
     min_plays: dict[str, int] = {}
+    # Situation factors per position (features/situation.py): level factors
+    # shift a season's scoring, range factors widen its yearly step. Empty
+    # means none (the step 5 model).
+    situation_level: dict[str, tuple[str, ...]] = {}
+    situation_range: dict[str, tuple[str, ...]] = {}
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)

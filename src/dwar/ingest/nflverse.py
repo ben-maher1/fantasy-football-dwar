@@ -47,6 +47,12 @@ DRAFT_PICK_COLUMNS = (
 # load_combine carries draft results, which are unknown between the combine
 # and the draft. Draft capital comes from draft_picks instead.
 COMBINE_DROP = ("draft_team", "draft_round", "draft_ovr")
+# Play-by-play is large (about 370 columns); keep what the situation factors use.
+PBP_COLUMNS = (
+    "game_id", "season", "week", "season_type", "game_date", "posteam", "defteam",
+    "play_type", "qtr", "down", "score_differential", "pass", "rush", "qb_dropback",
+    "qb_epa", "passer_player_id", "receiver_player_id", "rusher_player_id", "pass_oe", "xpass",
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,8 @@ class DatasetSpec:
     kwargs: dict[str, Any] = field(default_factory=dict)
     keep: tuple[str, ...] | None = None
     drop: tuple[str, ...] = ()
+    last_season: int | None = None
+    adds_season: bool = False  # the loader returns no season column; fetch one season at a time and add it
 
 
 DATASETS: dict[str, DatasetSpec] = {
@@ -66,6 +74,12 @@ DATASETS: dict[str, DatasetSpec] = {
     "draft_picks": DatasetSpec("load_draft_picks", first_season=1990, keep=DRAFT_PICK_COLUMNS),
     "combine": DatasetSpec("load_combine", first_season=2000, drop=COMBINE_DROP),
     "snap_counts": DatasetSpec("load_snap_counts", first_season=2013),
+    "pbp": DatasetSpec("load_pbp", first_season=1999, keep=PBP_COLUMNS),
+    # Depth charts changed format in 2025: weekly files before, timestamped
+    # daily snapshots (column `dt`, no season) from 2025 on.
+    "depth_charts": DatasetSpec("load_depth_charts", first_season=2001, last_season=2024),
+    "depth_charts_daily": DatasetSpec("load_depth_charts", first_season=2025, adds_season=True),
+    "rosters_weekly": DatasetSpec("load_rosters_weekly", first_season=2002),
     "players": DatasetSpec("load_players", seasonal=False),
     "ff_playerids": DatasetSpec("load_ff_playerids", seasonal=False),
 }
@@ -91,7 +105,13 @@ def _spec(dataset: str) -> DatasetSpec:
 def _fetch(spec: DatasetSpec, seasons: list[int] | None) -> pl.DataFrame:
     update_config(cache_mode="off")
     loader = getattr(nflreadpy, spec.loader)
-    df = loader(seasons, **spec.kwargs) if spec.seasonal else loader(**spec.kwargs)
+    if spec.adds_season:
+        df = pl.concat(
+            [loader([s], **spec.kwargs).with_columns(season=pl.lit(s, pl.Int32)) for s in seasons or []],
+            how="diagonal_relaxed",
+        )
+    else:
+        df = loader(seasons, **spec.kwargs) if spec.seasonal else loader(**spec.kwargs)
     if spec.keep is not None:
         missing = sorted(set(spec.keep) - set(df.columns))
         if missing:
@@ -156,7 +176,8 @@ def pull(
         return write_files(root, SOURCE, dataset, {ALL_FILE: df}, now, package_version)
 
     if seasons is None:
-        seasons = list(range(spec.first_season, nflreadpy.get_current_season() + 1))
+        seasons = list(range(spec.first_season, (spec.last_season or nflreadpy.get_current_season()) + 1))
+    seasons = [s for s in seasons if s >= (spec.first_season or s) and s <= (spec.last_season or s)]
     todo = stale_seasons(dataset, seasons, now, max_age, root)
     if not todo:
         return []

@@ -11,6 +11,7 @@ actual value falls in it (PIT) for calibration.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 import numpy as np
 import polars as pl
@@ -20,11 +21,27 @@ from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
 from dwar.model.talent import for_position, link, simulate_weeks
 from dwar.value.dwar import draw_indices
-from dwar.value.projection import PositionDraws, project_latent
+from dwar.value.projection import PositionDraws, project_latent, situation_effects
 from dwar.value.short_games import ShortGames, short_games
 from dwar.value.spread import widen
 
 MIN_GAMES = 4  # player-seasons scored
+
+
+@dataclass(frozen=True)
+class Situation:
+    """One position's situation factors for the forecast season, keyed by player_id."""
+
+    level: pl.DataFrame
+    range: pl.DataFrame
+
+    @staticmethod
+    def aligned(df: pl.DataFrame, player_ids: pl.Series, names: tuple[str, ...]) -> np.ndarray | None:
+        """(players, len(names)) in `player_ids` order; players without a row get 0."""
+        if not names:
+            return None
+        rows = pl.DataFrame({"player_id": player_ids}).join(df, on="player_id", how="left")
+        return rows.select([pl.col(n).fill_null(0.0) for n in names]).to_numpy().astype(float)
 
 
 def pit(samples: np.ndarray, actual: float) -> float:
@@ -41,13 +58,14 @@ def kde_log_density(samples: np.ndarray, actual: float) -> float:
 
 def forecast_position(
     r: FitResult, likelihood: str, targets: pl.DataFrame, season: int, n_draws: int, rng: np.random.Generator,
-    short: ShortGames | None = None, spread: float = 1.0,
+    short: ShortGames | None = None, spread: float = 1.0, situation: Situation | None = None,
 ) -> pl.DataFrame:
     """Forecasts for `targets` (player_id, games_played, fpts_per_game) at
     one position. Players the fit does not know get no row. With `short`,
     some simulated games are short appearances (see value/short_games.py).
     `spread` widens each forecast about its mean (see value/spread.py);
-    `pred_sd_raw` is the spread before widening."""
+    `pred_sd_raw` is the spread before widening. `situation` holds each
+    player's factors for `season`, used when the fit has factor slots."""
     total = r.posterior["posterior"].sizes["chain"] * r.posterior["posterior"].sizes["draw"]
     draws = PositionDraws.from_posterior(r.data, r.posterior, likelihood, draw_indices(total, n_draws))
     latest = (
@@ -61,8 +79,15 @@ def forecast_position(
     if latest.is_empty():
         return pl.DataFrame()
     last_season = latest["season"].to_numpy()
+    ps_idx = latest["ps_idx"].to_numpy()
+    level_next = range_next = None
+    if situation is not None:
+        level_next = situation.aligned(situation.level, latest["player_id"], r.data.season_x_names)
+        range_next = situation.aligned(situation.range, latest["player_id"], r.data.season_vol_x_names)
+    shift, vol = situation_effects(draws, r.data, ps_idx, last_season, season, level_next, range_next)
     latent = project_latent(
-        draws, latest["ps_idx"].to_numpy(), last_season, latest["age_c"].to_numpy() + 26.0, np.array([season]), rng,
+        draws, ps_idx, last_season, latest["age_c"].to_numpy() + 26.0, np.array([season]), rng,
+        None if shift is None else shift[:, :, None], None if vol is None else vol[:, :, None],
     )[:, :, 0]
     center = link(latent, likelihood, lib=np)
     params = {n: v[:, None] for n, v in draws.params.items()} | {"zero_value": draws.zero_value}
@@ -96,7 +121,7 @@ def forecast_position(
 def forecast_season(
     fits: dict[str, FitResult], likelihood: str | Mapping[str, str], actual: pl.DataFrame, season: int,
     n_draws: int, seed: int, tables: PlayerTables | None = None, min_plays: Mapping[str, int] | None = None,
-    spread: Mapping[str, float] | None = None,
+    spread: Mapping[str, float] | None = None, situation: Mapping[str, Situation] | None = None,
 ) -> pl.DataFrame:
     """DWAR forecasts for every scored player-season in `actual` (player_id,
     position, games_played, fpts_per_game for `season`), with a
@@ -113,7 +138,10 @@ def forecast_season(
             if tables is not None else None
         )
         k = (spread or {}).get(position, 1.0)
-        f = forecast_position(r, for_position(likelihood, position), targets, season, n_draws, rng, short, k)
+        f = forecast_position(
+            r, for_position(likelihood, position), targets, season, n_draws, rng, short, k,
+            (situation or {}).get(position),
+        )
         if not f.is_empty():
             frames.append(f.with_columns(position=pl.lit(position)))
     forecasts = pl.concat(frames) if frames else pl.DataFrame(schema={"player_id": pl.String, "position": pl.String})
