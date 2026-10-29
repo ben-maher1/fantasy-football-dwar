@@ -30,6 +30,7 @@ from dwar.value.availability import AvailabilityDraws, fit_availability, season_
 from dwar.value.projection import PositionDraws, project_talent
 from dwar.value.replacement import replacement_level
 from dwar.value.short_games import ShortGames, short_games
+from dwar.value.spread import widen
 from dwar.value.wins import team_score_sd, wins_per_game
 
 PERCENTILES = (5, 25, 50, 75, 95)
@@ -152,6 +153,7 @@ def position_dwar(
     last_age = latest["age_c"].to_numpy() + 26.0
     seasons = np.arange(clock.current - 1, clock.current + cfg.horizon_seasons + 1)
     talent = project_talent(pd_, latest["ps_idx"].to_numpy(), last_season, last_age, seasons, rng)
+    talent = widen(talent, cfg.spread_factor.get(position, 1.0), axis=0)
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
 
