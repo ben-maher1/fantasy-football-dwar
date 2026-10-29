@@ -113,6 +113,7 @@ def build_model_data(
     season_covariates: pl.DataFrame | None = None,
     prospect_covariates: pl.DataFrame | None = None,
     unplayed_rookies: bool = True,
+    min_plays: int = 0,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -120,7 +121,11 @@ def build_model_data(
 
     With `unplayed_rookies`, players from the latest draft class who have not
     played get a rookie-season row with no games, so the model draws their
-    talent from the rookie prior and they can be valued before Week 1."""
+    talent from the rookie prior and they can be valued before Week 1.
+
+    Weeks with fewer than `min_plays` plays (an injury exit, a mop-up
+    series) still count as games played but are left out of the observed
+    points, because they say little about the player's scoring rate."""
     weeks = tables.player_weeks.filter(
         (pl.col("position") == position) & (pl.col("season") >= first_season)
     )
@@ -154,8 +159,13 @@ def build_model_data(
     )
     # Explicit sorts after every join: polars does not promise join order, and
     # both alignment and bit-for-bit reproducible sampling depend on it.
+    observed = weeks
+    if min_plays:
+        if "plays" not in weeks.columns or weeks["plays"].null_count() == weeks.height:
+            raise ValueError("min_plays needs weekly play counts, and these tables have none")
+        observed = weeks.filter(pl.col("plays") >= min_plays)
     obs = (
-        weeks.with_row_index("_row")
+        observed.with_row_index("_row")
         .join(ps.select("player_id", "season", "ps_idx"), on=["player_id", "season"], how="inner")
         .sort("_row")
     )

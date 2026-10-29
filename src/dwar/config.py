@@ -93,7 +93,18 @@ class ModelConfig(_Frozen):
     seed: int
     first_season: int
     positions: tuple[str, ...]
-    likelihood: Literal["sqrt_hurdle", "studentt"]
+    likelihood: Literal["sqrt_hurdle", "sqrt_hurdle_log", "studentt"]
+    # Per-position overrides of `likelihood`.
+    likelihood_by_position: dict[str, Literal["sqrt_hurdle", "sqrt_hurdle_log", "studentt"]] = {}
+    # Weeks below this many plays (attempts + sacks + carries) are left out
+    # of a position's talent fit; they still count as games played.
+    min_plays: dict[str, int] = {}
+
+    def likelihood_for(self, position: str) -> str:
+        return self.likelihood_by_position.get(position, self.likelihood)
+
+    def likelihoods(self) -> dict[str, str]:
+        return {p: self.likelihood_for(p) for p in self.positions}
     sampler: SamplerSettings
     diagnostics: DiagnosticThresholds
 
@@ -103,6 +114,8 @@ class ValueConfig(_Frozen):
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
     replacement_seasons: int = Field(gt=0)   # recent complete seasons that set replacement level
     pool_min_games: int = Field(ge=1)        # games for a player-season to count in that pool
+    calibrate_spread: tuple[str, ...] = ()   # positions whose backtest learns a spread factor
+    spread_factor: dict[str, float] = {}     # weekly runs: factor per position (value/spread.py)
 
 
 def _read_yaml(path: Path) -> dict:

@@ -11,7 +11,7 @@ from dwar.model.talent import (
 from .simulate import LIKELIHOOD_TRUTH
 
 # Distribution centers spanning bench to elite receivers on each scale.
-CENTERS = {"points": [2.0, 8.0, 18.0], "sqrt": [1.5, 3.0, 4.3]}
+CENTERS = {"points": [2.0, 8.0, 18.0], "sqrt": [1.5, 3.0, 4.3], "log": [1.5, 3.0, 4.3]}
 
 
 @pytest.mark.parametrize("likelihood", LIKELIHOODS)
@@ -62,3 +62,11 @@ def test_softplus_link_is_positive_and_near_identity():
 def test_unknown_likelihood():
     with pytest.raises(ValueError, match="unknown likelihood"):
         simulate_weeks("poisson", np.ones(3), {}, np.random.default_rng())
+
+
+def test_log_link_makes_a_latent_step_proportional():
+    step = 0.1
+    for level in (2.0, 4.0):
+        x = np.log(level)
+        ratio = link(np.array([x + step]), "sqrt_hurdle_log", lib=np) / link(np.array([x]), "sqrt_hurdle_log", lib=np)
+        assert ratio[0] == pytest.approx(np.exp(step))

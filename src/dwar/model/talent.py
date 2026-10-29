@@ -24,6 +24,13 @@ Weekly distributions (config `likelihood`):
   the position's observed mean over such weeks (about -0.6 for QBs, whose
   bad weeks go negative; about 0 elsewhere). Expected points:
   talent = p * (loc^2 + sigma^2 * nu / (nu - 2)) + (1 - p) * zero_value.
+- sqrt_hurdle_log: the same weekly model, but loc = exp(latent), so the
+  latent scale is log(loc). Every additive effect on it (the yearly
+  random-walk step, the age curve, the priors) becomes proportional: a step
+  of 0.1 moves loc about 10% and points per game about 20%, whatever the
+  player's level. With the softplus link a step moves loc by a fixed amount,
+  so high scorers (QBs above all) drift far more in points than real
+  players do; step 5 validation found QB forecasts too wide for that reason.
 - studentt: symmetric heavy tails on the points scale, as first specified;
   center = talent. Kept as the baseline it was compared against.
 
@@ -34,13 +41,16 @@ the comparison.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 
 from dwar.model.data import ModelData
 
-LIKELIHOODS = ("sqrt_hurdle", "studentt")
+LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
+HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
 SQRT_PIVOT = 3.0  # sqrt-scale location (about 9 ppg) at which the zero-week log-odds are h0
 
 # Global parameters checked by the parameter-recovery test.
@@ -50,6 +60,7 @@ LATENT_PARAMS = (
 )
 LIKELIHOOD_PARAMS = {
     "sqrt_hurdle": ("sigma", "nu", "h0", "h1"),
+    "sqrt_hurdle_log": ("sigma", "nu", "h0", "h1"),
     "studentt": ("sigma", "nu"),
 }
 
@@ -64,6 +75,11 @@ PRIORS = {
         "alpha0": (3.0, 1.5), "alpha_pick": 1.0, "alpha_undrafted": 1.0, "sigma_rookie": 1.5,
         "mu_vet": (3.0, 1.5), "sigma_vet": 2.0, "tau": 1.0, "beta1": 0.3, "beta2": 0.06, "covariate": 0.3,
     },
+    # log(loc): loc 3 (about 9 ppg) is 1.1; 0.1 is about a 10% change in loc.
+    "log": {
+        "alpha0": (1.0, 0.5), "alpha_pick": 0.3, "alpha_undrafted": 0.3, "sigma_rookie": 0.5,
+        "mu_vet": (1.0, 0.5), "sigma_vet": 0.7, "tau": 0.3, "beta1": 0.1, "beta2": 0.02, "covariate": 0.1,
+    },
 }
 
 
@@ -74,7 +90,17 @@ def _check(likelihood: str) -> None:
 
 def scale_of(likelihood: str) -> str:
     _check(likelihood)
-    return "sqrt" if likelihood == "sqrt_hurdle" else "points"
+    return {"sqrt_hurdle": "sqrt", "sqrt_hurdle_log": "log"}.get(likelihood, "points")
+
+
+def for_position(likelihood: str | Mapping[str, str], position: str) -> str:
+    """One likelihood for every position, or a position -> likelihood map."""
+    return likelihood if isinstance(likelihood, str) else likelihood[position]
+
+
+def is_hurdle(likelihood: str) -> bool:
+    _check(likelihood)
+    return likelihood in HURDLE
 
 
 def softplus(x, lib=pt):
@@ -84,18 +110,21 @@ def softplus(x, lib=pt):
 def link(latent, likelihood: str, lib=pt):
     """Latent scale -> the weekly distribution's center. Softplus keeps the
     sqrt-scale location positive while staying close to identity for any
-    useful player."""
-    return softplus(latent, lib) if scale_of(likelihood) == "sqrt" else latent
+    useful player; exp makes latent effects proportional."""
+    scale = scale_of(likelihood)
+    if scale == "sqrt":
+        return softplus(latent, lib)
+    return lib.exp(latent) if scale == "log" else latent
 
 
 def nonzero_prob(loc, h0, h1, lib=pt):
-    """sqrt_hurdle: probability a week scores above zero."""
+    """Hurdle likelihoods: probability a week scores above zero."""
     return 1.0 / (1.0 + lib.exp(-(h0 + h1 * (loc - SQRT_PIVOT))))
 
 
 def talent_from_center(likelihood: str, center, params: dict, lib=np):
     """Expected weekly points given the distribution's center."""
-    if scale_of(likelihood) == "sqrt":
+    if is_hurdle(likelihood):
         nu = params["nu"]
         p = nonzero_prob(center, params["h0"], params["h1"], lib)
         return p * (center**2 + params["sigma"] ** 2 * nu / (nu - 2.0)) + (1 - p) * params.get("zero_value", 0.0)
@@ -108,7 +137,7 @@ def simulate_weeks(likelihood: str, center: np.ndarray, params: dict, rng: np.ra
     tests."""
     _check(likelihood)
     t = params["sigma"] * rng.standard_t(params["nu"], center.shape)
-    if likelihood == "sqrt_hurdle":
+    if is_hurdle(likelihood):
         p = nonzero_prob(center, params["h0"], params["h1"], np)
         return np.where(rng.random(center.shape) < p, (center + t) ** 2, params.get("zero_value", 0.0))
     return center + t
@@ -179,11 +208,11 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
             latent = latent + pt.dot(d.season_x, eta)
         center = link(latent, likelihood)
 
-        if likelihood == "sqrt_hurdle":
+        if is_hurdle(likelihood):
             sigma = pm.HalfNormal("sigma", 2.0)
             nu = pm.Deterministic("nu", 2.0 + pm.Gamma("nu_minus_2", 2.0, 0.1))
             h0 = pm.Normal("h0", 1.0, 1.5)
-            h1 = pm.Normal("h1", 0.0, 1.5)
+            h1 = pm.HalfNormal("h1", 3.0)  # zero weeks get rarer as talent rises
             loc = pm.Deterministic("loc", center, dims="player_season")
             params = {"sigma": sigma, "nu": nu, "h0": h0, "h1": h1, "zero_value": d.zero_week_mean}
             pm.Deterministic("talent", talent_from_center(likelihood, loc, params, pt), dims="player_season")

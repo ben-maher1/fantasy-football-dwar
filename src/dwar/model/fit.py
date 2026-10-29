@@ -16,13 +16,14 @@ from pathlib import Path
 import numpy as np
 import nutpie
 import polars as pl
+import xarray as xr
 from xarray import DataTree
 
 from dwar.config import ModelConfig
 from dwar.features.player_tables import PlayerTables
 from dwar.model.data import ModelData, build_model_data
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
-from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, simulate_weeks
+from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, is_hurdle, simulate_weeks
 
 log = logging.getLogger(__name__)
 
@@ -39,11 +40,19 @@ class FitResult:
     talent: pl.DataFrame
 
 
+# Started at zero instead of a random point: with a log-scale latent, a
+# random age-curve start (beta2 near +-2 at age 41) puts exp() past overflow.
+UNJITTERED = ("beta1", "beta2")
+
+
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    compiled = nutpie.compile_pymc_model(build_talent_model(d, cfg.likelihood))
+    model = build_talent_model(d, cfg.likelihood_for(d.position))
+    jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
+    compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler
     return nutpie.sample(
-        compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False
+        compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False,
+        save_warmup=False,
     )
 
 
@@ -81,7 +90,7 @@ def posterior_predictive_check(d: ModelData, posterior: DataTree, likelihood: st
     statistics over simulated seasons. `fits` is true when observed falls
     inside that range."""
     rng = np.random.default_rng(seed)
-    talent = _draws(posterior, "loc" if likelihood == "sqrt_hurdle" else "talent")
+    talent = _draws(posterior, "loc" if is_hurdle(likelihood) else "talent")
     params = {n: _draws(posterior, n) for n in LIKELIHOOD_PARAMS[likelihood]}
     picks = rng.choice(len(talent), size=min(PPC_DRAWS, len(talent)), replace=False)
     sims = np.stack([
@@ -114,7 +123,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         "seed": cfg.seed,
         "sampler": cfg.sampler.model_dump(),
         "position": d.position,
-        "likelihood": cfg.likelihood,
+        "likelihood": cfg.likelihood_for(d.position),
         "n_obs": d.n_obs,
         "n_player_seasons": d.n_ps,
         "n_players": d.n_players,
@@ -124,7 +133,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         **(meta or {}),
     }
     if diag.passed:
-        diag.extra["posterior_predictive"] = posterior_predictive_check(d, posterior, cfg.likelihood, cfg.seed)
+        diag.extra["posterior_predictive"] = posterior_predictive_check(d, posterior, cfg.likelihood_for(d.position), cfg.seed)
 
     name = d.position.lower()
     (out_dir / f"{name}_diagnostics.json").write_text(json.dumps(diag.to_dict(), indent=2, default=str))
@@ -144,7 +153,7 @@ def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: d
     failure after the rest have run (the run is failed as a whole)."""
     results, failures = {}, []
     for position in cfg.positions:
-        d = build_model_data(tables, position, cfg.first_season)
+        d = build_model_data(tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0))
         try:
             results[position] = fit(d, cfg, out_dir, meta)
         except FitFailed as e:
@@ -152,3 +161,20 @@ def fit_positions(tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: d
     if failures:
         raise failures[0]
     return results
+
+
+def load_fit(d: ModelData, out_dir: Path) -> FitResult | None:
+    """A passing fit previously written by `fit` for `d.position`, or None.
+    `d` must be built from the same tables the fit used."""
+    name = d.position.lower()
+    diag_path, nc_path = out_dir / f"{name}_diagnostics.json", out_dir / f"{name}.nc"
+    if not (diag_path.exists() and nc_path.exists()):
+        return None
+    diag = Diagnostics(**json.loads(diag_path.read_text()))
+    if not diag.passed:
+        return None
+    posterior = xr.open_datatree(nc_path)
+    if posterior["posterior"].sizes.get("player_season") != d.n_ps:
+        raise ValueError(f"saved {d.position} fit in {out_dir} does not match these tables")
+    talent = pl.read_parquet(out_dir / f"{name}_talent.parquet")
+    return FitResult(data=d, posterior=posterior, diagnostics=diag, talent=talent)

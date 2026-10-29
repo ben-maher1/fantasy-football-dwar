@@ -40,3 +40,19 @@ def test_random_walk_variance_grows_with_seasons_ahead():
 def test_inverse_softplus_roundtrip():
     x = np.array([-3.0, 0.0, 0.5, 4.0, 20.0])
     np.testing.assert_allclose(inverse_softplus(softplus(x, np)), x, atol=1e-8)
+
+
+def test_log_scale_draws_recover_latent_from_loc():
+    from types import SimpleNamespace
+
+    import xarray as xr
+
+    loc = np.exp(np.array([[[-1.0, 0.5, 1.4]]]))
+    one = lambda v: (("chain", "draw"), np.full((1, 1), v))
+    post = xr.DataTree.from_dict({"posterior": xr.Dataset({
+        "loc": (("chain", "draw", "player_season"), loc), "talent": (("chain", "draw", "player_season"), loc**2),
+        "beta1": one(0.0), "beta2": one(0.0), "tau": one(0.1),
+        "sigma": one(1.0), "nu": one(20.0), "h0": one(2.0), "h1": one(2.0),
+    })})
+    d = PositionDraws.from_posterior(SimpleNamespace(zero_week_mean=0.0), post, "sqrt_hurdle_log", np.array([0]))
+    np.testing.assert_allclose(d.latent[0], [-1.0, 0.5, 1.4])

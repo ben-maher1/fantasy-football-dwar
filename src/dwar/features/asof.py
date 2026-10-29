@@ -35,9 +35,11 @@ COMBINE_KNOWABLE_MONTH_DAY = (3, 15)
 SCHEDULE_KNOWABLE_MONTH_DAY = (6, 1)
 REGULAR_SEASON = "REG"
 
+# Plays a player passed or carried on, a snap-count proxy for every season.
+PLAY_COLUMNS = ("attempts", "sacks_suffered", "carries")
 STAT_KEEP = (
     "player_id", "player_display_name", "season", "week", "game_id", "team", "opponent_team",
-    *sorted({c for cols in STAT_COLUMNS.values() for c in cols}),
+    *sorted({c for cols in STAT_COLUMNS.values() for c in cols} | set(PLAY_COLUMNS)),
 )
 COMBINE_KEEP = ("ht", "wt", "forty", "bench", "vertical", "broad_jump", "cone", "shuttle")
 

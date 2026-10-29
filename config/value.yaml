@@ -3,3 +3,6 @@ draws: 1000              # posterior draws carried through projection
 horizon_seasons: 5       # full seasons after the current one (decision 3: plus the rest of this season)
 replacement_seasons: 3   # recent complete seasons whose player pool sets replacement level
 pool_min_games: 4        # games for a player-season to count in that pool and in team-score SD
+calibrate_spread: [QB]   # widen QB ranges by past misses (value/spread.py); step 5 found them too narrow
+spread_factor:           # set from the latest backtest (validate summary "spread_factor")
+  QB: 1.172              # 2012-2022 development seasons

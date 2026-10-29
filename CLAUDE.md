@@ -49,6 +49,12 @@ and otherwise points = Z^2 with Z Student-t (heavy tails for blowup weeks).
 was the original spec; on real WRs it put talent about 1.3 PPG below observed
 scoring and is kept only as a baseline (`likelihood: studentt`).
 
+QB differs (step 5 validation, chosen by ben): talent is on a log scale
+(`sqrt_hurdle_log`), so yearly drift is proportional to level. Weeks under 15
+plays (short appearances) are left out of the fit and added back in forecasts
+and DWAR. Forecast ranges are widened by a spread factor learned from past
+backtest misses (`config/value.yaml`), a stopgap until situation factors exist.
+
 Latent structure:
 - `talent[i, s]`: player-season true scoring rate. Evolves as a random walk across
   seasons, with position-specific innovation scale.
