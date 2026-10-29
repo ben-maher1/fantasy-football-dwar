@@ -20,7 +20,13 @@ import polars as pl
 from dwar.config import ModelConfig, load_scoring, uses_situation
 from dwar.features.asof import REGULAR_SEASON, RawTables, asof_snapshot
 from dwar.features.player_tables import PlayerTables, build_player_tables
-from dwar.features.situation import Covariates, SituationRaw, Sources, model_covariates, prepare
+from dwar.features.situation import (
+    Covariates,
+    SituationRaw,
+    Sources,
+    model_covariates,
+    prepare,
+)
 from dwar.model.diagnostics import FitFailed
 from dwar.model.fit import FitResult, fit, load_fit, position_data
 

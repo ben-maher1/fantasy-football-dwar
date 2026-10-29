@@ -15,7 +15,7 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import yaml
@@ -78,7 +78,7 @@ def run_experiment(name: str, truth_as_of: date | None = None, label: str | None
     os.environ["DWAR_CONFIG_DIR"] = str(write_config(name, run, root))
     seasons = seasons or run.seasons
     label = label or ("holdout" if set(seasons) <= set(HOLDOUT_SEASONS) else "dev")
-    return validate(root, truth_as_of or date.today(), seasons, label)
+    return validate(root, truth_as_of or datetime.now(UTC).date(), seasons, label)
 
 
 if __name__ == "__main__":
