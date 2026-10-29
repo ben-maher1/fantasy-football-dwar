@@ -34,5 +34,5 @@ The step 6 CLI will wrap this.
 | 3 | WR talent model: fit, diagnostics, parameter recovery | done |
 | 4a | Talent fits for QB, RB, WR, TE | done |
 | 4b | Replacement level, points to wins, projection, DWAR output | done |
-| 5 | Out-of-sample validation vs baselines, calibration, availability | in review: fails at QB (see `reports/validation/dev.md`) |
+| 5 | Out-of-sample validation vs baselines, calibration, availability | in review: passes except QB log score in holdout (see `reports/validation/`) |
 | 6–7 | CLI, market backtest | not started |
