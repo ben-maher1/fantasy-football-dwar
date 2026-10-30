@@ -16,7 +16,7 @@ import numpy as np
 from xarray import DataTree
 
 from dwar.model.data import AGE_CENTER, ModelData
-from dwar.model.talent import LIKELIHOOD_PARAMS, link, scale_of, talent_from_center
+from dwar.model.talent import LIKELIHOOD_PARAMS, age_curve_effect, link, scale_of, talent_from_center
 
 
 def inverse_softplus(y: np.ndarray) -> np.ndarray:
@@ -38,6 +38,7 @@ class PositionDraws:
     zero_value: float
     eta: np.ndarray | None = None    # (draws, k) level-factor effects
     kappa: np.ndarray | None = None  # (draws, j) range-factor effects on log step size
+    age_curve: str = "quadratic"
 
     @classmethod
     def from_posterior(
@@ -67,11 +68,12 @@ class PositionDraws:
             zero_value=d.zero_week_mean,
             eta=maybe("eta"),
             kappa=maybe("kappa"),
+            age_curve="hinge" if "age_knot" in posterior["posterior"] else "quadratic",
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
         a = np.asarray(age) - AGE_CENTER
-        return self.beta1[:, None] * a + self.beta2[:, None] * a**2
+        return age_curve_effect(a, self.beta1[:, None], self.beta2[:, None], self.age_curve)
 
     def expected_points(self, latent: np.ndarray) -> np.ndarray:
         center = link(latent, self.likelihood, lib=np)

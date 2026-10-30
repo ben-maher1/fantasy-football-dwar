@@ -47,7 +47,7 @@ UNJITTERED = ("beta1", "beta2")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    model = build_talent_model(d, cfg.likelihood_for(d.position))
+    model = build_talent_model(d, cfg.likelihood_for(d.position), cfg.age_curve.get(d.position, "quadratic"))
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler

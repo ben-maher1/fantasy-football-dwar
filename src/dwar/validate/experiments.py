@@ -43,6 +43,7 @@ class Run:
     range: dict[str, list[str]] = field(default_factory=dict)
     model: dict = field(default_factory=dict)   # other model.yaml overrides
     value: dict = field(default_factory=dict)   # value.yaml overrides
+    fits_from: str | None = None                # reuse another run's fits (same model, new forecasts)
 
 
 def _all(seasons: tuple[int, ...], group: str | None = None, **kw) -> Run:
@@ -53,7 +54,13 @@ def _all(seasons: tuple[int, ...], group: str | None = None, **kw) -> Run:
 RUNS: dict[str, Run] = {
     "step5": Run(DEV_SEASONS),  # the step 5 model, re-run on today's data for paired comparisons
     "A": _all(DEV_SEASONS),
+    # A's fits; QB short-game chances by preseason role (QB1 or not).
+    "A_role": _all(DEV_SEASONS, value={"short_by_role": ["QB"]}, fits_from="A"),
     **{f"B_no_{g}": _all(SCREEN_SEASONS, g) for g in GROUPS},
+    # Run C: the QB spread factor off, and a hinge QB age curve (QB refit only).
+    "C_nospread": _all(DEV_SEASONS, value={"short_by_role": ["QB"], "calibrate_spread": []}, fits_from="A"),
+    "C_hinge": _all(DEV_SEASONS, model={"positions": ["QB"], "age_curve": {"QB": "hinge"}},
+                    value={"short_by_role": ["QB"]}),
 }
 
 
@@ -76,6 +83,8 @@ def run_experiment(name: str, truth_as_of: date | None = None, label: str | None
     run = RUNS[name]
     root = data_dir() / "experiments" / name
     os.environ["DWAR_CONFIG_DIR"] = str(write_config(name, run, root))
+    if run.fits_from and not (root / "fits").exists():
+        (root / "fits").symlink_to(data_dir() / "experiments" / run.fits_from / "fits", target_is_directory=True)
     seasons = seasons or run.seasons
     label = label or ("holdout" if set(seasons) <= set(HOLDOUT_SEASONS) else "dev")
     return validate(root, truth_as_of or datetime.now(UTC).date(), seasons, label)

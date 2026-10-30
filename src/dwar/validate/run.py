@@ -26,6 +26,7 @@ from dwar.validate.baselines import baseline_forecasts
 from dwar.validate.forecast import Situation, forecast_season
 from dwar.validate.report import calibration_plot, pit_histograms
 from dwar.validate.score import scored_rows, summarize
+from dwar.value.short_games import ROLE_FACTOR
 from dwar.value.spread import spread_factor
 
 log = logging.getLogger(__name__)
@@ -57,10 +58,12 @@ def season_results(raw: RawTables, season: int, truth: pl.DataFrame, root: Path)
         return pl.read_parquet(path)
     cfg = load_model_config()
     tables, fits, cov = fit_season(raw, season, cfg, root)
+    by_role = load_value_config().short_by_role
     situation = {
         p: Situation(
             c.level.filter(pl.col("season") == season).drop("season"),
             c.range.filter(pl.col("season") == season).drop("season"),
+            c.roles(ROLE_FACTOR[p]) if p in by_role and p in ROLE_FACTOR else None,
         )
         for p, c in cov.items()
     }

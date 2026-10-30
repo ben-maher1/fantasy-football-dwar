@@ -104,6 +104,8 @@ class ModelConfig(_Frozen):
     # means none (the step 5 model).
     situation_level: dict[str, tuple[str, ...]] = {}
     situation_range: dict[str, tuple[str, ...]] = {}
+    # Per-position age curve (model/talent.py): quadratic (default) or hinge.
+    age_curve: dict[str, Literal["quadratic", "hinge"]] = {}
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)
@@ -125,6 +127,7 @@ class ValueConfig(_Frozen):
     pool_min_games: int = Field(ge=1)        # games for a player-season to count in that pool
     calibrate_spread: tuple[str, ...] = ()   # positions whose backtest learns a spread factor
     spread_factor: dict[str, float] = {}     # weekly runs: factor per position (value/spread.py)
+    short_by_role: tuple[str, ...] = ()      # positions whose short-game chance depends on preseason role
 
 
 def _read_yaml(path: Path) -> dict:

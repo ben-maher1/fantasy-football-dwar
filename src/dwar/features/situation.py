@@ -429,6 +429,13 @@ class Covariates:
     level: pl.DataFrame   # player_id, season, *level names
     range: pl.DataFrame   # player_id, season, *range names
     center: dict[str, tuple[float, float]]
+    raw: pl.DataFrame     # player_id, season, every factor unstandardized
+
+    def roles(self, factor: str) -> pl.DataFrame | None:
+        """(player_id, season, role) from a 0/1 factor, if computed."""
+        if factor not in self.raw.columns:
+            return None
+        return self.raw.select("player_id", "season", role=pl.col(factor).cast(pl.Float64)).drop_nulls()
 
 
 def covariates(
@@ -449,7 +456,8 @@ def covariates(
     keys = ["player_id", "season"]
     lvl = t.select(*keys, *[((pl.col(c) - center[c][0]) / center[c][1]).fill_null(0.0).fill_nan(0.0).alias(c) for c in level])
     rng = t.select(*keys, *[pl.col(c).fill_null(0.0).cast(pl.Float64) for c in range_])
-    return Covariates(level=lvl, range=rng, center=center)
+    raw = t.select(*keys, *[c for c in t.columns if c in {f for cols in (*LEVEL.values(), *RANGE.values()) for f in cols}])
+    return Covariates(level=lvl, range=rng, center=center, raw=raw)
 
 
 def model_covariates(

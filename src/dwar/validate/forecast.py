@@ -34,6 +34,13 @@ class Situation:
 
     level: pl.DataFrame
     range: pl.DataFrame
+    roles: pl.DataFrame | None = None  # player_id, season, role: preseason roles for short-game chances
+
+    def role_list(self, player_ids: pl.Series, season: int) -> list[float | None] | None:
+        if self.roles is None:
+            return None
+        now = self.roles.filter(pl.col("season") == season).select("player_id", "role")
+        return pl.DataFrame({"player_id": player_ids}).join(now, on="player_id", how="left")["role"].to_list()
 
     @staticmethod
     def aligned(df: pl.DataFrame, player_ids: pl.Series, names: tuple[str, ...]) -> np.ndarray | None:
@@ -92,7 +99,8 @@ def forecast_position(
     center = link(latent, likelihood, lib=np)
     params = {n: v[:, None] for n, v in draws.params.items()} | {"zero_value": draws.zero_value}
     talent = draws.expected_points(latent)
-    rates = short.rates(latest["player_id"].to_list()) if short else np.zeros(latest.height)
+    roles = situation.role_list(latest["player_id"], season) if situation is not None else None
+    rates = short.rates(latest["player_id"].to_list(), roles) if short else np.zeros(latest.height)
     if short:
         talent = short.expected(talent, rates[None, :])
     rows = []
@@ -133,14 +141,18 @@ def forecast_season(
     frames = []
     for position, r in fits.items():
         targets = scored.filter(pl.col("position") == position).select("player_id", "games_played", "fpts_per_game")
+        sit = (situation or {}).get(position)
+        history = sit.roles.filter(pl.col("season") < season) if sit is not None and sit.roles is not None else None
         short = (
-            short_games(tables.player_weeks, position, (min_plays or {}).get(position, 0), int(r.data.ps_keys["season"].min()))
+            short_games(
+                tables.player_weeks, position, (min_plays or {}).get(position, 0), int(r.data.ps_keys["season"].min()),
+                history,
+            )
             if tables is not None else None
         )
         k = (spread or {}).get(position, 1.0)
         f = forecast_position(
-            r, for_position(likelihood, position), targets, season, n_draws, rng, short, k,
-            (situation or {}).get(position),
+            r, for_position(likelihood, position), targets, season, n_draws, rng, short, k, sit,
         )
         if not f.is_empty():
             frames.append(f.with_columns(position=pl.lit(position)))

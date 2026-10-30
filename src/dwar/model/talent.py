@@ -1,7 +1,8 @@
 """PyMC model of player-season talent: expected fantasy points per game played.
 
     latent[i,s]    = level[i,s] + age_effect(age[i,s]) + season_x @ eta
-    age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2
+    age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2         (quadratic, default)
+                   = beta1*min(a-30, 0) + beta2*max(a-30, 0)   (hinge: two straight lines meeting at 30)
     level[i,s]     = level[i,s-1] + tau*exp(season_vol_x @ kappa)*sqrt(gap)*z[i,s]
     latent[i,first] ~ Normal(prior_mean_i, prior_sd_i)   (before season covariates)
     center[i,s]    = link(latent[i,s])
@@ -56,6 +57,7 @@ from dwar.model.data import ModelData
 
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
+AGE_KNOT = 30.0  # hinge age curve: where the slope may change
 KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
 SQRT_PIVOT = 3.0  # sqrt-scale location (about 9 ppg) at which the zero-week log-odds are h0
 
@@ -157,7 +159,15 @@ def _shrunk_coefs(name: str, dim: str, sd: float) -> pt.TensorVariable:
     return pm.Normal(name, 0.0, sd, dims=dim)
 
 
-def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Model:
+def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic"):
+    """Age effect from age minus AGE_CENTER (26); works on numpy or tensors."""
+    if curve == "hinge":
+        a = age_c - (AGE_KNOT - 26.0)
+        return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
+    return beta1 * age_c + beta2 * age_c**2
+
+
+def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic") -> pm.Model:
     coords = {
         "player": list(d.player_ids),
         "player_season": np.arange(d.n_ps),
@@ -178,10 +188,13 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
             gamma = _shrunk_coefs("gamma", "prospect_cov", pr["covariate"])
             rookie_mean = rookie_mean + pt.dot(d.prospect_x, gamma)
 
-        # Age curve, quadratic around 26.
+        # Age curve: quadratic around 26, or a hinge at AGE_KNOT whose two
+        # slopes are beta1 (before) and beta2 (after).
         beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
-        beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
-        age_effect = beta1 * d.ps_age_c + beta2 * d.ps_age_c**2
+        beta2 = pm.Normal("beta2", 0.0, pr["beta1"] if age_curve == "hinge" else pr["beta2"])
+        if age_curve == "hinge":
+            pm.Deterministic("age_knot", pt.constant(AGE_KNOT))
+        age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve)
 
         # First-season latent talent per player. Rookies are non-centered
         # (little data each); veterans are centered, because their long
