@@ -5,4 +5,5 @@ replacement_seasons: 3   # recent complete seasons whose player pool sets replac
 pool_min_games: 4        # games for a player-season to count in that pool and in team-score SD
 calibrate_spread: [QB]   # widen QB ranges by past misses (value/spread.py); step 5 found them too narrow
 spread_factor:           # set from the latest backtest (validate summary "spread_factor")
-  QB: 1.172              # 2012-2022 development seasons
+  QB: 1.343              # 2012-2025 backtest of the situation-factor model (run F)
+short_by_role: [QB]      # QB short-game chance by preseason role, QB1 or not (situation factors step)
