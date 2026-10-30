@@ -16,14 +16,10 @@ import numpy as np
 import polars as pl
 
 from dwar.config import data_dir
-from dwar.validate.score import BOOTSTRAP, scored_rows
+from dwar.validate.score import BOOTSTRAP, floored, scored_rows
 
 POSITIONS = ("QB", "RB", "WR", "TE")
-FLOOR_WEIGHT, FLOOR_RANGE = 0.01, 40.0  # the proposed floor: 1% of probability spread over 0-40 PPG
 
-
-def floored(log_score: np.ndarray) -> np.ndarray:
-    return np.log((1 - FLOOR_WEIGHT) * np.exp(log_score) + FLOOR_WEIGHT / FLOOR_RANGE)
 KEYS = ["player_id", "season", "position"]
 
 

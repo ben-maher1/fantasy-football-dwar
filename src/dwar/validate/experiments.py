@@ -10,6 +10,7 @@ fit and forecast lands under `data/experiments/{name}/`.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -18,11 +19,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import polars as pl
 import yaml
 
 from dwar.config import config_dir, data_dir
 from dwar.features.situation import GROUPS, LEVEL, RANGE
 from dwar.validate.run import DEV_SEASONS, HOLDOUT_SEASONS, validate
+from dwar.validate.score import summarize
 
 log = logging.getLogger(__name__)
 
@@ -57,11 +60,12 @@ RUNS: dict[str, Run] = {
     # A's fits; QB short-game chances by preseason role (QB1 or not).
     "A_role": _all(DEV_SEASONS, value={"short_by_role": ["QB"]}, fits_from="A"),
     **{f"B_no_{g}": _all(SCREEN_SEASONS, g) for g in GROUPS},
-    # The final set, from runs B (each kept only where it clearly helped).
+    # The final set, from runs B: a group stays at a position where removing
+    # it makes MAE or the floored log score clearly worse (90% interval),
+    # and neither clearly better.
     "F": Run(
         DEV_SEASONS,
-        level={"QB": ["qb_starter", "weapons"], "RB": ["competition", "vacated", "rookie_capital"],
-               "TE": ["competition", "vacated", "rookie_capital"]},
+        level={"QB": ["qb_starter"], "RB": ["competition", "vacated", "rookie_capital"]},
         value={"short_by_role": ["QB"]},
     ),
     # Run C: the QB spread factor off, and a hinge QB age curve (QB refit only).
@@ -95,6 +99,18 @@ def run_experiment(name: str, truth_as_of: date | None = None, label: str | None
     seasons = seasons or run.seasons
     label = label or ("holdout" if set(seasons) <= set(HOLDOUT_SEASONS) else "dev")
     return validate(root, truth_as_of or datetime.now(UTC).date(), seasons, label)
+
+
+def rescore(name: str, label: str) -> dict:
+    """Recompute a finished run's scores from its saved results with the
+    current scoring rules, keeping the rest of its summary."""
+    out = data_dir() / "experiments" / name / label
+    summary = json.loads((out / "summary.json").read_text())
+    results = pl.read_parquet(out / "results.parquet")
+    positions = tuple(sorted(results["position"].unique().to_list(), key="QBRBWRTE".find))
+    summary |= summarize(results, positions)
+    (out / "summary.json").write_text(json.dumps(summary, indent=2))
+    return summary
 
 
 if __name__ == "__main__":
