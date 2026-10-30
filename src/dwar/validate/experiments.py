@@ -57,6 +57,13 @@ RUNS: dict[str, Run] = {
     # A's fits; QB short-game chances by preseason role (QB1 or not).
     "A_role": _all(DEV_SEASONS, value={"short_by_role": ["QB"]}, fits_from="A"),
     **{f"B_no_{g}": _all(SCREEN_SEASONS, g) for g in GROUPS},
+    # The final set, from runs B (each kept only where it clearly helped).
+    "F": Run(
+        DEV_SEASONS,
+        level={"QB": ["qb_starter", "weapons"], "RB": ["competition", "vacated", "rookie_capital"],
+               "TE": ["competition", "vacated", "rookie_capital"]},
+        value={"short_by_role": ["QB"]},
+    ),
     # Run C: the QB spread factor off, and a hinge QB age curve (QB refit only).
     "C_nospread": _all(DEV_SEASONS, value={"short_by_role": ["QB"], "calibrate_spread": []}, fits_from="A"),
     "C_hinge": _all(DEV_SEASONS, model={"positions": ["QB"], "age_curve": {"QB": "hinge"}},
@@ -91,6 +98,8 @@ def run_experiment(name: str, truth_as_of: date | None = None, label: str | None
 
 
 if __name__ == "__main__":
+    # name [seasons label], e.g. F 2023,2024,2025 holdout
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    summary = run_experiment(sys.argv[1])
+    seasons = tuple(int(s) for s in sys.argv[2].split(",")) if len(sys.argv) > 2 else None
+    summary = run_experiment(sys.argv[1], label=sys.argv[3] if len(sys.argv) > 3 else None, seasons=seasons)
     print({g: summary["groups"][g]["dwar"] for g in summary["groups"]})
