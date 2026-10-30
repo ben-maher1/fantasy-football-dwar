@@ -19,6 +19,11 @@ from dwar.config import data_dir
 from dwar.validate.score import BOOTSTRAP, scored_rows
 
 POSITIONS = ("QB", "RB", "WR", "TE")
+FLOOR_WEIGHT, FLOOR_RANGE = 0.01, 40.0  # the proposed floor: 1% of probability spread over 0-40 PPG
+
+
+def floored(log_score: np.ndarray) -> np.ndarray:
+    return np.log((1 - FLOOR_WEIGHT) * np.exp(log_score) + FLOOR_WEIGHT / FLOOR_RANGE)
 KEYS = ["player_id", "season", "position"]
 
 
@@ -51,6 +56,8 @@ def paired(a: pl.DataFrame, b: pl.DataFrame, seed: int = 0) -> dict:
         boot = np.random.default_rng(seed).integers(0, len(g), size=(BOOTSTRAP, len(g)))
         mae_gain = np.array([_mae(y[i], pb[i], w[i]) - _mae(y[i], pa[i], w[i]) for i in boot])
         ls_gain = (la[boot] - lb[boot]).mean(axis=1)
+        fa, fb = floored(la), floored(lb)
+        fl_gain = (fa[boot] - fb[boot]).mean(axis=1)
 
         def calib(pit: np.ndarray) -> dict:
             return {"cover90": float((np.abs(pit - 0.5) <= 0.45).mean()),
@@ -65,6 +72,8 @@ def paired(a: pl.DataFrame, b: pl.DataFrame, seed: int = 0) -> dict:
             "log_score": [float(la.mean()), float(lb.mean())],
             "log_score_gain": float(la.mean() - lb.mean()),
             "log_score_gain_90": [float(x) for x in np.percentile(ls_gain, [5, 95])],
+            "floored_gain": float(fa.mean() - fb.mean()),
+            "floored_gain_90": [float(x) for x in np.percentile(fl_gain, [5, 95])],
             "calibration": [calib(g["pit"].to_numpy()), calib(g["pit_b"].to_numpy())],
         }
     return out
@@ -72,12 +81,13 @@ def paired(a: pl.DataFrame, b: pl.DataFrame, seed: int = 0) -> dict:
 
 def table(result: dict, a: str, b: str) -> str:
     lines = [f"{a} vs {b} (positive = {a} better)",
-             f"{'group':6} {'n':>5} {'MAE gain':>22} {'log score gain':>24} {'90% cover':>12} {'bottom 10%':>12}"]
+             f"{'group':6} {'n':>5} {'MAE gain':>22} {'log score gain':>24} {'floored gain':>24} {'90% cover':>12} {'bottom 10%':>12}"]
     for g, r in result.items():
         c = r["calibration"]
         lines.append(
             f"{g:6} {r['n']:5d} {r['mae_gain']:+.3f} ({r['mae_gain_90'][0]:+.3f},{r['mae_gain_90'][1]:+.3f}) "
             f"{r['log_score_gain']:+.3f} ({r['log_score_gain_90'][0]:+.3f},{r['log_score_gain_90'][1]:+.3f}) "
+            f"{r['floored_gain']:+.3f} ({r['floored_gain_90'][0]:+.3f},{r['floored_gain_90'][1]:+.3f}) "
             f"{c[0]['cover90']:.2f}/{c[1]['cover90']:.2f} {c[0]['bottom10']:.2f}/{c[1]['bottom10']:.2f}"
         )
     return "\n".join(lines)

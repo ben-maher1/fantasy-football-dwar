@@ -188,12 +188,15 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
             gamma = _shrunk_coefs("gamma", "prospect_cov", pr["covariate"])
             rookie_mean = rookie_mean + pt.dot(d.prospect_x, gamma)
 
-        # Age curve: quadratic around 26, or a hinge at AGE_KNOT whose two
-        # slopes are beta1 (before) and beta2 (after).
-        beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
-        beta2 = pm.Normal("beta2", 0.0, pr["beta1"] if age_curve == "hinge" else pr["beta2"])
+        # Age curve: quadratic around 26, or a hinge at AGE_KNOT with slopes
+        # age_slope_pre and age_slope_post (named apart so a saved fit says
+        # which curve it used).
         if age_curve == "hinge":
-            pm.Deterministic("age_knot", pt.constant(AGE_KNOT))
+            beta1 = pm.Normal("age_slope_pre", 0.0, pr["beta1"])
+            beta2 = pm.Normal("age_slope_post", 0.0, pr["beta1"])
+        else:
+            beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
+            beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
         age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve)
 
         # First-season latent talent per player. Rookies are non-centered

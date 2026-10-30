@@ -51,6 +51,7 @@ class PositionDraws:
         def maybe(name: str) -> np.ndarray | None:
             return take(name) if name in posterior["posterior"] else None
 
+        hinge = "age_slope_pre" in posterior["posterior"]
         if scale_of(likelihood) == "sqrt":
             latent = inverse_softplus(take("loc"))
         elif scale_of(likelihood) == "log":
@@ -61,14 +62,14 @@ class PositionDraws:
             likelihood=likelihood,
             latent=latent,
             talent=take("talent"),
-            beta1=take("beta1"),
-            beta2=take("beta2"),
+            beta1=take("beta1" if not hinge else "age_slope_pre"),
+            beta2=take("beta2" if not hinge else "age_slope_post"),
             tau=take("tau"),
             params={n: take(n) for n in LIKELIHOOD_PARAMS[likelihood]},
             zero_value=d.zero_week_mean,
             eta=maybe("eta"),
             kappa=maybe("kappa"),
-            age_curve="hinge" if "age_knot" in posterior["posterior"] else "quadratic",
+            age_curve="hinge" if hinge else "quadratic",
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:

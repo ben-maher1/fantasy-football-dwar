@@ -43,7 +43,7 @@ class FitResult:
 
 # Started at zero instead of a random point: with a log-scale latent, a
 # random age-curve start (beta2 near +-2 at age 41) puts exp() past overflow.
-UNJITTERED = ("beta1", "beta2")
+UNJITTERED = ("beta1", "beta2", "age_slope_pre", "age_slope_post")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
