@@ -99,6 +99,13 @@ class ModelConfig(_Frozen):
     # Weeks below this many plays (attempts + sacks + carries) are left out
     # of a position's talent fit; they still count as games played.
     min_plays: dict[str, int] = {}
+    # Situation factors per position (features/situation.py): level factors
+    # shift a season's scoring, range factors widen its yearly step. Empty
+    # means none (the step 5 model).
+    situation_level: dict[str, tuple[str, ...]] = {}
+    situation_range: dict[str, tuple[str, ...]] = {}
+    # Per-position age curve (model/talent.py): quadratic (default) or hinge.
+    age_curve: dict[str, Literal["quadratic", "hinge"]] = {}
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)
@@ -109,6 +116,10 @@ class ModelConfig(_Frozen):
     diagnostics: DiagnosticThresholds
 
 
+def uses_situation(cfg: ModelConfig) -> bool:
+    return any(cfg.situation_level.values()) or any(cfg.situation_range.values())
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
@@ -116,6 +127,7 @@ class ValueConfig(_Frozen):
     pool_min_games: int = Field(ge=1)        # games for a player-season to count in that pool
     calibrate_spread: tuple[str, ...] = ()   # positions whose backtest learns a spread factor
     spread_factor: dict[str, float] = {}     # weekly runs: factor per position (value/spread.py)
+    short_by_role: tuple[str, ...] = ()      # positions whose short-game chance depends on preseason role
 
 
 def _read_yaml(path: Path) -> dict:

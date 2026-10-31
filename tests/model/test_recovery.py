@@ -86,6 +86,20 @@ def test_season_covariate_slot(tmp_path):
     assert lo[0] <= effect <= hi[0] and lo[0] > 0
 
 
+def test_range_covariate_slot(tmp_path):
+    """A flag that makes a season's step exp(0.7), about twice, as large is
+    recovered, and the yearly step size is not inflated to absorb it."""
+    cfg = load_model_config()
+    sim = simulate(n_players=300, range_effect=0.7, seed=13)
+    assert sim.data.season_vol_x_names == ("moved",)
+    result = fit(sim.data, cfg, tmp_path)
+    assert result.diagnostics.passed, result.diagnostics.failures
+    lo, hi = interval(result.posterior, "kappa", 0.5, 99.5)
+    assert lo[0] <= 0.7 <= hi[0] and lo[0] > 0
+    lo, hi = interval(result.posterior, "tau", 0.5, 99.5)
+    assert lo <= sim.truth["tau"] <= hi
+
+
 def test_same_seed_same_draws():
     sim = simulate(n_players=30, weeks_per_season=6, seed=3)
     cfg = load_model_config()

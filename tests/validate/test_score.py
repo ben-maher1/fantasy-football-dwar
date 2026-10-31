@@ -25,7 +25,7 @@ def test_better_forecast_beats_baselines():
     out = compare(rows(2000, dwar_noise=1.0, base_noise=3.0))
     assert out["beats_all"]
     for b in out["baselines"].values():
-        assert b["mae_gain"] > 0 and b["mae_gain_90"][0] > 0 and b["log_score_gain"] == pytest.approx(1.0)
+        assert b["mae_gain"] > 0 and b["mae_gain_90"][0] > 0 and b["log_score_gain"] == pytest.approx(1.0, abs=0.01)  # floor shaves a little
 
 
 def test_perfect_forecast_has_zero_mae():
@@ -54,3 +54,11 @@ def test_too_narrow_forecasts_undercover():
 def test_kde_log_density_near_normal():
     rng = np.random.default_rng(2)
     assert kde_log_density(rng.normal(0, 1, 5000), 0.0) == pytest.approx(-0.5 * np.log(2 * np.pi), abs=0.05)
+
+
+def test_floor_caps_a_freak_miss():
+    from dwar.validate.score import FLOOR_RANGE, FLOOR_WEIGHT, floored
+
+    out = floored(np.array([-150.0, -2.5]))
+    assert out[0] == pytest.approx(np.log(FLOOR_WEIGHT / FLOOR_RANGE))  # about -8.3, not -150
+    assert out[1] == pytest.approx(-2.5, abs=0.02)                      # ordinary scores barely move

@@ -37,6 +37,8 @@ class ModelData:
     ps_start: np.ndarray     # index of the player's first player-season
     season_x: np.ndarray     # (n_ps, k) covariates shifting talent; k may be 0
     season_x_names: tuple[str, ...]
+    season_vol_x: np.ndarray      # (n_ps, j) flags widening that season's random-walk step; j may be 0
+    season_vol_x_names: tuple[str, ...]
     # one entry per player
     player_ids: tuple[str, ...]
     log_pick_z: np.ndarray   # standardized log draft pick (undrafted at pick 260)
@@ -106,18 +108,35 @@ def _unplayed_rookie_seasons(tables: PlayerTables, position: str, first_season: 
     )
 
 
+def _per_season(ps: pl.DataFrame, covariates: pl.DataFrame | None, name: str) -> pl.DataFrame:
+    if covariates is None:
+        return pl.DataFrame()
+    x = (
+        ps.select("ps_idx", "player_id", "season")
+        .join(covariates, on=["player_id", "season"], how="left")
+        .sort("ps_idx")
+        .drop("ps_idx", "player_id", "season")
+    )
+    if x.null_count().sum_horizontal().item():
+        raise ValueError(f"{name} must cover every player-season with no nulls")
+    return x
+
+
 def build_model_data(
     tables: PlayerTables,
     position: str = "WR",
     first_season: int = 2006,
     season_covariates: pl.DataFrame | None = None,
     prospect_covariates: pl.DataFrame | None = None,
+    season_range_covariates: pl.DataFrame | None = None,
     unplayed_rookies: bool = True,
     min_plays: int = 0,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
     covariate. Both slots are empty in v1 and filled by later steps.
+    `season_range_covariates`, keyed like `season_covariates`, scale each
+    season's random-walk step (see model/talent.py).
 
     With `unplayed_rookies`, players from the latest draft class who have not
     played get a rookie-season row with no games, so the model draws their
@@ -191,17 +210,8 @@ def build_model_data(
         )
         prospect = pl.concat([prospect, extra], how="horizontal")
 
-    if season_covariates is not None:
-        season_x = (
-            ps.select("ps_idx", "player_id", "season")
-            .join(season_covariates, on=["player_id", "season"], how="left")
-            .sort("ps_idx")
-            .drop("ps_idx", "player_id", "season")
-        )
-        if season_x.null_count().sum_horizontal().item():
-            raise ValueError("season_covariates must cover every player-season with no nulls")
-    else:
-        season_x = pl.DataFrame()
+    season_x = _per_season(ps, season_covariates, "season_covariates")
+    season_vol_x = _per_season(ps, season_range_covariates, "season_range_covariates")
 
     y = obs["fpts"].to_numpy().astype(float)
     return ModelData(
@@ -217,6 +227,8 @@ def build_model_data(
         ps_start=ps["ps_start"].to_numpy().astype(np.int64),
         season_x=season_x.to_numpy().astype(float).reshape(ps.height, season_x.width),
         season_x_names=tuple(season_x.columns),
+        season_vol_x=season_vol_x.to_numpy().astype(float).reshape(ps.height, season_vol_x.width),
+        season_vol_x_names=tuple(season_vol_x.columns),
         player_ids=tuple(players["player_id"].to_list()),
         log_pick_z=player_feats["log_pick_z"].to_numpy(),
         undrafted=player_feats["undrafted"].to_numpy(),
