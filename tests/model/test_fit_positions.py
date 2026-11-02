@@ -9,7 +9,7 @@ from dwar.model.diagnostics import Diagnostics, FitFailed
 
 def test_all_positions_attempted_and_any_failure_fails_the_run(monkeypatch, tmp_path):
     attempted = []
-    monkeypatch.setattr(fit_module, "build_model_data", lambda tables, position, first_season, min_plays=0: position)
+    monkeypatch.setattr(fit_module, "build_model_data", lambda tables, position, first_season, min_plays=0, **covariates: position)
 
     def fake_fit(d, cfg, out_dir, meta=None):
         attempted.append(d)
@@ -25,7 +25,7 @@ def test_all_positions_attempted_and_any_failure_fails_the_run(monkeypatch, tmp_
 
 
 def test_all_positions_pass(monkeypatch, tmp_path):
-    monkeypatch.setattr(fit_module, "build_model_data", lambda tables, position, first_season, min_plays=0: position)
+    monkeypatch.setattr(fit_module, "build_model_data", lambda tables, position, first_season, min_plays=0, **covariates: position)
     monkeypatch.setattr(fit_module, "fit", lambda d, cfg, out_dir, meta=None: f"fit-{d}")
     cfg = load_model_config()
     assert fit_module.fit_positions(None, cfg, tmp_path) == {p: f"fit-{p}" for p in cfg.positions}

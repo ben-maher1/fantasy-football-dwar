@@ -23,9 +23,10 @@ from dwar.features.player_tables import build_player_tables
 from dwar.validate.availability import availability_forecast, summarize_availability
 from dwar.validate.backtest import SCORING, fit_season
 from dwar.validate.baselines import baseline_forecasts
-from dwar.validate.forecast import forecast_season
+from dwar.validate.forecast import Situation, forecast_season
 from dwar.validate.report import calibration_plot, pit_histograms
 from dwar.validate.score import scored_rows, summarize
+from dwar.value.short_games import ROLE_FACTOR
 from dwar.value.spread import spread_factor
 
 log = logging.getLogger(__name__)
@@ -56,13 +57,22 @@ def season_results(raw: RawTables, season: int, truth: pl.DataFrame, root: Path)
     if path.exists():
         return pl.read_parquet(path)
     cfg = load_model_config()
-    tables, fits = fit_season(raw, season, cfg, root)
+    tables, fits, cov = fit_season(raw, season, cfg, root)
+    by_role = load_value_config().short_by_role
+    situation = {
+        p: Situation(
+            c.level.filter(pl.col("season") == season).drop("season"),
+            c.range.filter(pl.col("season") == season).drop("season"),
+            c.roles(ROLE_FACTOR[p]) if p in by_role and p in ROLE_FACTOR else None,
+        )
+        for p, c in cov.items()
+    }
     spread = {p: spread_factor(_past_forecasts(root, season, p)) for p in load_value_config().calibrate_spread}
     actual = truth.filter(pl.col("season") == season).select(
         "player_id", "season", "position", "games_played", "fpts_per_game"
     )
     dwar = forecast_season(
-        fits, cfg.likelihoods(), actual, season, FORECAST_DRAWS, cfg.seed, tables, cfg.min_plays, spread
+        fits, cfg.likelihoods(), actual, season, FORECAST_DRAWS, cfg.seed, tables, cfg.min_plays, spread, situation,
     )
     base = baseline_forecasts(tables.player_seasons, tables.player_static, dwar.select(actual.columns), season)
     out = dwar.join(base.drop("season", "games_played", "fpts_per_game"), on=["player_id", "position"], how="left")
@@ -77,7 +87,7 @@ def season_availability(raw: RawTables, season: int, truth: pl.DataFrame, root: 
     if path.exists():
         return pl.read_parquet(path)
     cfg = load_model_config()
-    tables, fits = fit_season(raw, season, cfg, root)
+    tables, fits, _ = fit_season(raw, season, cfg, root)
     schedules = asof_snapshot(raw, tables.as_of).schedules
     out = availability_forecast(fits, tables, schedules, cfg.likelihoods(), truth, season, FORECAST_DRAWS, cfg.seed)
     path.parent.mkdir(parents=True, exist_ok=True)

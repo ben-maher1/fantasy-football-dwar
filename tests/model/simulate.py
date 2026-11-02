@@ -82,10 +82,12 @@ def simulate(
     seed: int = 7,
     season_effect: float | None = None,
     likelihood: str | None = None,
+    range_effect: float | None = None,
 ) -> Simulated:
     """`season_effect`, if given, adds one season covariate with that true
-    coefficient, to test the covariate slot. `likelihood` defaults to the
-    configured one."""
+    coefficient, to test the covariate slot. `range_effect`, if given, adds
+    a 0/1 flag (a third of seasons) that multiplies that season's step by
+    exp(range_effect). `likelihood` defaults to the configured one."""
     likelihood = likelihood or load_model_config().likelihood
     rng = np.random.default_rng(seed)
     player_rows, season_rows = [], []
@@ -114,11 +116,17 @@ def simulate(
     seasons = pl.DataFrame(season_rows)
     if season_effect is not None:
         seasons = seasons.with_columns(boost=pl.Series(rng.normal(0, 1, seasons.height)))
+    if range_effect is not None:
+        seasons = seasons.with_columns(moved=pl.Series((rng.random(seasons.height) < 1 / 3).astype(float)))
 
     # Build once with placeholder weeks to get the exact feature arrays the model sees.
     skeleton = seasons.select("player_id", "season", fpts=pl.lit(0.0))
     covs = seasons.select("player_id", "season", "boost") if season_effect is not None else None
-    d0 = build_model_data(_tables(players, seasons, skeleton), first_season=FIRST_SEASON, season_covariates=covs)
+    vols = seasons.select("player_id", "season", "moved") if range_effect is not None else None
+    d0 = build_model_data(
+        _tables(players, seasons, skeleton), first_season=FIRST_SEASON, season_covariates=covs,
+        season_range_covariates=vols,
+    )
 
     t = LATENT_TRUTH[scale_of(likelihood)]
     gamma = np.array([TRUE_GAMMA[scale_of(likelihood)].get(n, 0.0) for n in d0.prospect_x_names])
@@ -130,7 +138,8 @@ def simulate(
     steps = np.where(
         d0.ps_is_first,
         prior_mean[d0.ps_player] + prior_sd[d0.ps_player] * z - age_effect,
-        t["tau"] * np.sqrt(np.maximum(d0.ps_gap, 1.0)) * z,
+        t["tau"] * np.sqrt(np.maximum(d0.ps_gap, 1.0)) * z
+        * (np.exp(range_effect * d0.season_vol_x[:, 0]) if range_effect is not None else 1.0),
     )
     csum = np.cumsum(steps)
     level = csum - csum[d0.ps_start] + steps[d0.ps_start]
@@ -148,7 +157,7 @@ def simulate(
         "fpts": simulate_weeks(likelihood, np.repeat(center, n), LIKELIHOOD_TRUTH[likelihood], rng),
     })
     tables = _tables(players, seasons, weeks)
-    data = build_model_data(tables, first_season=FIRST_SEASON, season_covariates=covs)
+    data = build_model_data(tables, first_season=FIRST_SEASON, season_covariates=covs, season_range_covariates=vols)
     # With ~50 veterans, the sample mean and sd of their starting levels can sit
     # well away from mu_vet / sigma_vet by chance; the data can only reveal the
     # realized values, so the recovery test checks against these.

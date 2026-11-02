@@ -7,6 +7,10 @@ likelihood_by_position:
   QB: sqrt_hurdle_log    # proportional drift; additive drift made QB forecasts too wide (step 5)
 min_plays:               # weeks below this many plays (attempts + sacks + carries) are not fit
   QB: 15                 # drops injury exits and mop-up relief (about 14% of QB weeks)
+situation_level:         # situation factors kept by validation (features/situation.py)
+  QB: [qb_starter]       # QB1 on the preseason depth chart
+  RB: [competition, vacated, rookie_capital]  # target and carry competition
+situation_range: {}      # tested (changed team, new play-caller, new QB); none helped
 sampler:
   chains: 4
   tune: 1000

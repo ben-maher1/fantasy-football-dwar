@@ -12,16 +12,23 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date, timedelta
+from functools import cache
 from pathlib import Path
 
 import polars as pl
 
-from dwar.config import ModelConfig, load_scoring
+from dwar.config import ModelConfig, load_scoring, uses_situation
 from dwar.features.asof import REGULAR_SEASON, RawTables, asof_snapshot
 from dwar.features.player_tables import PlayerTables, build_player_tables
-from dwar.model.data import build_model_data
+from dwar.features.situation import (
+    Covariates,
+    SituationRaw,
+    Sources,
+    model_covariates,
+    prepare,
+)
 from dwar.model.diagnostics import FitFailed
-from dwar.model.fit import FitResult, fit, load_fit
+from dwar.model.fit import FitResult, fit, load_fit, position_data
 
 log = logging.getLogger(__name__)
 
@@ -45,22 +52,43 @@ def season_tables(raw: RawTables, season: int) -> PlayerTables:
     return build_player_tables(asof_snapshot(raw, backtest_as_of(raw, season)), load_scoring(SCORING))
 
 
+@cache
+def situation_sources() -> Sources:
+    return prepare(SituationRaw.from_cache())
+
+
+def season_covariates(
+    raw: RawTables, tables: PlayerTables, season: int, cfg: ModelConfig, src: Sources | None = None,
+) -> dict[str, Covariates]:
+    """Each position's situation factors for its fit rows and for `season`."""
+    if not uses_situation(cfg):
+        return {}
+    return model_covariates(
+        src or situation_sources(), asof_snapshot(raw, tables.as_of), tables, cfg.first_season,
+        cfg.situation_level, cfg.situation_range, (season,),
+    )
+
+
 def _retry_config(cfg: ModelConfig) -> ModelConfig:
     s = cfg.sampler
     return cfg.model_copy(update={"sampler": s.model_copy(update={"tune": 2 * s.tune, "draws": 2 * s.draws})})
 
 
-def fit_season(raw: RawTables, season: int, cfg: ModelConfig, root: Path) -> tuple[PlayerTables, dict[str, FitResult]]:
+def fit_season(
+    raw: RawTables, season: int, cfg: ModelConfig, root: Path,
+) -> tuple[PlayerTables, dict[str, FitResult], dict[str, Covariates]]:
     """Fit (or load) every position as of the start of `season`. Raises
-    FitFailed if a position fails both attempts."""
+    FitFailed if a position fails both attempts. Also returns each
+    position's situation factors (empty without any)."""
     tables = season_tables(raw, season)
+    cov = season_covariates(raw, tables, season, cfg)
     out = root / "fits" / str(season)
     record_path = out / "fit_log.json"
     record = json.loads(record_path.read_text()) if record_path.exists() else {}
     meta = {"as_of": tables.as_of.isoformat(), "scoring": SCORING, "backtest_season": season}
     fits = {}
     for position in cfg.positions:
-        d = build_model_data(tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0))
+        d = position_data(tables, position, cfg, cov)
         cached = load_fit(d, out)
         if cached is not None:
             fits[position] = cached
@@ -80,4 +108,4 @@ def fit_season(raw: RawTables, season: int, cfg: ModelConfig, root: Path) -> tup
         record_path.write_text(json.dumps(record, indent=2))
         if position not in fits:
             raise failure
-    return tables, fits
+    return tables, fits, cov

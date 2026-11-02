@@ -1,12 +1,18 @@
 """PyMC model of player-season talent: expected fantasy points per game played.
 
     latent[i,s]    = level[i,s] + age_effect(age[i,s]) + season_x @ eta
-    age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2
-    level[i,s]     = level[i,s-1] + tau*sqrt(gap)*z[i,s]
+    age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2         (quadratic, default)
+                   = beta1*min(a-30, 0) + beta2*max(a-30, 0)   (hinge: two straight lines meeting at 30)
+    level[i,s]     = level[i,s-1] + tau*exp(season_vol_x @ kappa)*sqrt(gap)*z[i,s]
     latent[i,first] ~ Normal(prior_mean_i, prior_sd_i)   (before season covariates)
     center[i,s]    = link(latent[i,s])
     fpts[i,s,w]    ~ weekly distribution around center[i,s]
     talent[i,s]    = expected weekly points under that distribution
+
+`season_x` holds level factors (situation: QB quality, scheme, target
+competition) and `season_vol_x` holds 0/1 range factors (changed teams, new
+play-caller, new QB) that make that season's step larger: a changed
+situation is a less predictable one. Both slots may be empty.
 
 The prior is placed on the first season's latent talent, not its level, so
 the prior means (rookie and veteran) are scoring rates at the age the player
@@ -51,6 +57,8 @@ from dwar.model.data import ModelData
 
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
+AGE_KNOT = 30.0  # hinge age curve: where the slope may change
+KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
 SQRT_PIVOT = 3.0  # sqrt-scale location (about 9 ppg) at which the zero-week log-odds are h0
 
 # Global parameters checked by the parameter-recovery test.
@@ -151,13 +159,22 @@ def _shrunk_coefs(name: str, dim: str, sd: float) -> pt.TensorVariable:
     return pm.Normal(name, 0.0, sd, dims=dim)
 
 
-def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Model:
+def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic"):
+    """Age effect from age minus AGE_CENTER (26); works on numpy or tensors."""
+    if curve == "hinge":
+        a = age_c - (AGE_KNOT - 26.0)
+        return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
+    return beta1 * age_c + beta2 * age_c**2
+
+
+def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic") -> pm.Model:
     coords = {
         "player": list(d.player_ids),
         "player_season": np.arange(d.n_ps),
         "obs": np.arange(d.n_obs),
         "prospect_cov": list(d.prospect_x_names),
         "season_cov": list(d.season_x_names),
+        "season_vol_cov": list(d.season_vol_x_names),
     }
     pr = PRIORS[scale_of(likelihood)]
     with pm.Model(coords=coords) as model:
@@ -171,10 +188,16 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
             gamma = _shrunk_coefs("gamma", "prospect_cov", pr["covariate"])
             rookie_mean = rookie_mean + pt.dot(d.prospect_x, gamma)
 
-        # Age curve, quadratic around 26.
-        beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
-        beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
-        age_effect = beta1 * d.ps_age_c + beta2 * d.ps_age_c**2
+        # Age curve: quadratic around 26, or a hinge at AGE_KNOT with slopes
+        # age_slope_pre and age_slope_post (named apart so a saved fit says
+        # which curve it used).
+        if age_curve == "hinge":
+            beta1 = pm.Normal("age_slope_pre", 0.0, pr["beta1"])
+            beta2 = pm.Normal("age_slope_post", 0.0, pr["beta1"])
+        else:
+            beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
+            beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
+        age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve)
 
         # First-season latent talent per player. Rookies are non-centered
         # (little data each); veterans are centered, because their long
@@ -198,7 +221,11 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle") -> pm.Mode
         steps = start[d.ps_player] - age_effect  # first seasons: level = start - age effect
         if len(later):
             step_z = pm.Normal("step_z", 0.0, 1.0, shape=len(later))
-            steps = pt.set_subtensor(steps[later], tau * np.sqrt(np.maximum(d.ps_gap[later], 1.0)) * step_z)
+            scale = tau * np.sqrt(np.maximum(d.ps_gap[later], 1.0))
+            if d.season_vol_x.shape[1]:
+                kappa = pm.Normal("kappa", 0.0, KAPPA_SD, dims="season_vol_cov")
+                scale = scale * pt.exp(pt.dot(d.season_vol_x[later], kappa))
+            steps = pt.set_subtensor(steps[later], scale * step_z)
         csum = pt.cumsum(steps)
         level = csum - csum[d.ps_start] + steps[d.ps_start]
 

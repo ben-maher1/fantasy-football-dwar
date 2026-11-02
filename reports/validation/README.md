@@ -135,6 +135,11 @@ the center for TE.
 
 ## Open items
 
+**Update 2026-10-30:** the situation-factors step resolved the QB item.
+With a preseason QB1 flag, QB now beats every baseline in both periods.
+See [situation/README.md](situation/README.md), which also moves the gate
+to a floored log score.
+
 - **QB.** It ties the best simple baseline instead of beating it, and its
   tails are too thin. The likely missing inputs are the situation factors
   ben asked for (new team, coaching, line, target competition). These are

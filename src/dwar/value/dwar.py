@@ -24,12 +24,13 @@ import polars as pl
 
 from dwar.config import LeagueFormat, ValueConfig
 from dwar.features.player_tables import PlayerTables
+from dwar.features.situation import Covariates
 from dwar.model.fit import FitResult
 from dwar.model.talent import for_position
 from dwar.value.availability import AvailabilityDraws, fit_availability, season_games
-from dwar.value.projection import PositionDraws, project_talent
+from dwar.value.projection import PositionDraws, future_situation, project_talent
 from dwar.value.replacement import replacement_level
-from dwar.value.short_games import ShortGames, short_games
+from dwar.value.short_games import ROLE_FACTOR, ShortGames, short_games
 from dwar.value.spread import widen
 from dwar.value.wins import team_score_sd, wins_per_game
 
@@ -84,6 +85,7 @@ class ValueInputs:
     sigma: float                        # weekly team-score SD
     availability: AvailabilityDraws
     short: dict[str, ShortGames] = field(default_factory=dict)  # positions with short appearances
+    situation: dict[str, Covariates] = field(default_factory=dict)  # positions with situation factors
 
 
 def replacement_from_fits(
@@ -110,7 +112,7 @@ def replacement_from_fits(
 def value_inputs(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
     fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], rng: np.random.Generator,
-    min_plays: Mapping[str, int] | None = None,
+    min_plays: Mapping[str, int] | None = None, situation: dict[str, Covariates] | None = None,
 ) -> ValueInputs:
     clock = season_clock(schedules, tables.as_of)
     first = next(iter(fits.values()))
@@ -126,11 +128,53 @@ def value_inputs(
     )
     talent = pl.concat([r.talent.with_columns(position=pl.lit(p)) for p, r in fits.items()])
     availability = fit_availability(talent, tables.player_seasons, schedules, tables.as_of).draw(len(idx), rng)
+    situation = situation or {}
+
+    def roles(p: str) -> pl.DataFrame | None:
+        cov = situation.get(p)
+        return cov.roles(ROLE_FACTOR[p]) if cov is not None and p in cfg.short_by_role and p in ROLE_FACTOR else None
+
     short = {
         p: s for p, r in fits.items()
-        if (s := short_games(tables.player_weeks, p, (min_plays or {}).get(p, 0), int(r.data.ps_keys["season"].min())))
+        if (s := short_games(
+            tables.player_weeks, p, (min_plays or {}).get(p, 0), int(r.data.ps_keys["season"].min()), roles(p),
+        ))
     }
-    return ValueInputs(clock, draws, replacement, sigma, availability, short)
+    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation)
+
+
+def _situation(
+    position: str, r: FitResult, inputs: ValueInputs, latest: pl.DataFrame, seasons: np.ndarray,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Projection shift and step scale from each player's known situation
+    for the season after his latest fitted one."""
+    cov = inputs.situation.get(position)
+    if cov is None:
+        return None, None
+    nxt = latest.select("player_id", season=(pl.col("season") + 1).cast(pl.Int32))
+
+    def aligned(df: pl.DataFrame, names: tuple[str, ...]) -> np.ndarray | None:
+        if not names:
+            return None
+        rows = nxt.join(df.with_columns(pl.col("season").cast(pl.Int32)), on=["player_id", "season"], how="left")
+        return rows.select([pl.col(n).fill_null(0.0) for n in names]).to_numpy().astype(float)
+
+    return future_situation(
+        inputs.draws[position], r.data, latest["ps_idx"].to_numpy(), latest["season"].to_numpy(), seasons,
+        aligned(cov.level, r.data.season_x_names), aligned(cov.range, r.data.season_vol_x_names),
+    )
+
+
+def _next_roles(position: str, inputs: ValueInputs, latest: pl.DataFrame) -> list[float | None] | None:
+    """Each player's preseason role for the season after his latest one,
+    held for every season valued."""
+    cov = inputs.situation.get(position)
+    short = inputs.short.get(position)
+    if cov is None or short is None or not short.role_base or position not in ROLE_FACTOR:
+        return None
+    roles = cov.roles(ROLE_FACTOR[position])
+    nxt = latest.select("player_id", season=(pl.col("season") + 1).cast(pl.Int32))
+    return nxt.join(roles.with_columns(pl.col("season").cast(pl.Int32)), on=["player_id", "season"], how="left")["role"].to_list()
 
 
 def position_dwar(
@@ -152,7 +196,8 @@ def position_dwar(
     last_season = latest["season"].to_numpy()
     last_age = latest["age_c"].to_numpy() + 26.0
     seasons = np.arange(clock.current - 1, clock.current + cfg.horizon_seasons + 1)
-    talent = project_talent(pd_, latest["ps_idx"].to_numpy(), last_season, last_age, seasons, rng)
+    shift, vol = _situation(position, r, inputs, latest, seasons)
+    talent = project_talent(pd_, latest["ps_idx"].to_numpy(), last_season, last_age, seasons, rng, shift, vol)
     talent = widen(talent, cfg.spread_factor.get(position, 1.0), axis=0)
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
@@ -161,7 +206,7 @@ def position_dwar(
     repl = inputs.replacement[position][:, None]
     remaining = np.array([clock.remaining.get(t, clock.remaining_default) for t in latest["team"].to_list()])
     short = inputs.short.get(position)
-    short_rate = short.rates(latest["player_id"].to_list())[None, :] if short else 0.0
+    short_rate = short.rates(latest["player_id"].to_list(), _next_roles(position, inputs, latest))[None, :] if short else 0.0
     short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0
     alive = np.ones(talent.shape[:2])
     total = np.zeros(talent.shape[:2])
@@ -182,11 +227,11 @@ def position_dwar(
 def dwar_table(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
     fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], seed: int,
-    min_plays: Mapping[str, int] | None = None,
+    min_plays: Mapping[str, int] | None = None, situation: dict[str, Covariates] | None = None,
 ) -> tuple[pl.DataFrame, dict]:
     """The DWAR output table and a summary of the inputs behind it."""
     rng = np.random.default_rng(seed)
-    inputs = value_inputs(fits, tables, schedules, fmt, cfg, likelihood, rng, min_plays)
+    inputs = value_inputs(fits, tables, schedules, fmt, cfg, likelihood, rng, min_plays, situation)
     frames = []
     for p, r in fits.items():
         players, d = position_dwar(p, r, inputs, tables, fmt, cfg, rng)

@@ -29,3 +29,14 @@ def test_expected_and_simulated_points_mix_in_short_games():
     sims = s.simulate(np.full(200_000, 20.0), 0.25, np.random.default_rng(0))
     assert (sims < 20).mean() == pytest.approx(0.25, abs=0.01)
     assert set(np.unique(sims)) == {1.0, 2.0, 20.0}
+
+
+def test_rates_by_preseason_role():
+    """A was a QB1 in 2010 and B a backup in 2011. A benched starter gets the
+    backup rate when he has no history as a backup."""
+    roles = pl.DataFrame({"player_id": ["A", "B"], "season": [2010, 2011], "role": [1.0, 0.0]})
+    s = short_games(weeks(), "QB", 15, 2006, roles)
+    assert s.role_base == pytest.approx({1.0: 0.1, 0.0: 0.75})
+    assert s.role_rate[("A", 1.0)] == pytest.approx((1 + PRIOR_GAMES * 0.1) / (10 + PRIOR_GAMES))
+    got = s.rates(["A", "A", "NEW", "B"], [1.0, 0.0, 1.0, None])
+    assert got.tolist() == pytest.approx([s.role_rate[("A", 1.0)], 0.75, 0.1, s.rate["B"]])

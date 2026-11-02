@@ -4,6 +4,11 @@ All methods are scored on the same player-seasons: those with a DWAR
 forecast and every baseline (excluded rows are counted). MAE is weighted
 by games played; the log score is a plain mean per player-season. A
 difference is reported with a bootstrap 90% interval over player-seasons.
+
+Every method's predictive density gets the same floor before the log is
+taken: 1% of probability spread evenly over 0-40 PPG (chosen by ben,
+2026-10-30). Without it, a handful of freak breakouts, scored far in a
+forecast's tail, outweighed hundreds of ordinary player-seasons.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ import polars as pl
 
 from dwar.validate.baselines import METHODS
 
+FLOOR_WEIGHT, FLOOR_RANGE = 0.01, 40.0
 COVERAGE_LEVELS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 BOOTSTRAP = 1000
 
@@ -27,6 +33,11 @@ def scored_rows(results: pl.DataFrame) -> tuple[pl.DataFrame, dict[str, int]]:
     return results.filter(has_all), excluded
 
 
+def floored(log_score: np.ndarray) -> np.ndarray:
+    """Log density after mixing in the floor (see module docstring)."""
+    return np.log((1 - FLOOR_WEIGHT) * np.exp(log_score) + FLOOR_WEIGHT / FLOOR_RANGE)
+
+
 def _mae(actual: np.ndarray, pred: np.ndarray, w: np.ndarray) -> float:
     return float(np.sum(w * np.abs(actual - pred)) / np.sum(w))
 
@@ -36,7 +47,7 @@ def compare(rows: pl.DataFrame, seed: int = 0) -> dict:
     (positive = DWAR better) with bootstrap 90% intervals, and `beats`."""
     rng = np.random.default_rng(seed)
     actual, w = rows["fpts_per_game"].to_numpy(), rows["games_played"].to_numpy().astype(float)
-    dwar_pred, dwar_ls = rows["talent_mean"].to_numpy(), rows["log_score"].to_numpy()
+    dwar_pred, dwar_ls = rows["talent_mean"].to_numpy(), floored(rows["log_score"].to_numpy())
     boot = rng.integers(0, len(rows), size=(BOOTSTRAP, len(rows)))
     out = {
         "n": len(rows),
@@ -44,7 +55,7 @@ def compare(rows: pl.DataFrame, seed: int = 0) -> dict:
         "baselines": {},
     }
     for m in METHODS:
-        pred, ls = rows[m].to_numpy(), rows[f"{m}_log_score"].to_numpy()
+        pred, ls = rows[m].to_numpy(), floored(rows[f"{m}_log_score"].to_numpy())
         mae_gain = np.array([_mae(actual[i], pred[i], w[i]) - _mae(actual[i], dwar_pred[i], w[i]) for i in boot])
         ls_gain = (dwar_ls[boot] - ls[boot]).mean(axis=1)
         mae_diff = _mae(actual, pred, w) - out["dwar"]["mae"]
