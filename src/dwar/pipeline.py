@@ -15,6 +15,7 @@ from pathlib import Path
 
 from dwar.config import REPO_ROOT, load_format, load_model_config, load_scoring, load_value_config, uses_situation
 from dwar.features.asof import RawTables, asof_snapshot
+from dwar.features.injuries import InjuryRaw, injury_weeks
 from dwar.features.player_tables import build_player_tables
 from dwar.features.situation import SituationRaw, model_covariates, prepare
 from dwar.model.diagnostics import FitFailed
@@ -30,7 +31,7 @@ def output_dir(as_of: date, format_name: str, root: Path | None = None) -> Path:
 
 def run(
     as_of: date, format_name: str, root: Path | None = None, raw: RawTables | None = None,
-    situation_raw: SituationRaw | None = None,
+    situation_raw: SituationRaw | None = None, injury_raw: InjuryRaw | None = None,
 ) -> Path:
     """Run DWAR for one league format; returns the path of `dwar.parquet`."""
     start = time.perf_counter()
@@ -62,9 +63,12 @@ def run(
         (out / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2, default=str))
         raise
 
+    weeks = None
+    if value_cfg.injury_history:
+        weeks = injury_weeks(injury_raw or InjuryRaw.from_cache(), snap.schedules, tables.player_weeks, as_of)
     table, summary = dwar_table(
         fits, tables, snap.schedules, fmt, value_cfg, model_cfg.likelihoods(), model_cfg.seed, model_cfg.min_plays,
-        cov,
+        cov, weeks,
     )
     path = out / "dwar.parquet"
     table.write_parquet(path)

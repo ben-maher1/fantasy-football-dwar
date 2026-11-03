@@ -5,7 +5,7 @@ import polars as pl
 import pytest
 
 from dwar.value.availability import (
-    AvailabilityDraws, _design, _sigmoid, availability_rows, fit_logistic, season_games,
+    AvailabilityDraws, _design, _sigmoid, availability_rows, fit_games, fit_logistic, season_games,
 )
 
 
@@ -62,6 +62,20 @@ def test_rows_use_only_completed_seasons():
     assert season_games(sched).filter(pl.col("season") == 2023)["games"].item() == 3
 
 
+def test_lagged_rows_pair_games_with_last_seasons_talent():
+    sched = schedules([2021, 2022], in_progress=2023)
+    talent = pl.DataFrame({
+        "player_id": ["P", "P", "Q"], "season": [2021, 2022, 2022], "position": ["WR"] * 3,
+        "games_played": [3, 2, 3], "talent_mean": [10.0, 11.0, 6.0],
+    })
+    seasons = talent.select("player_id", "season", age_sept1=pl.lit(25.0))
+    games, survival = availability_rows(talent, seasons, sched, date(2023, 9, 10), lagged=True)
+    # Only P's 2022 has a season before it; it carries 2021's talent.
+    assert games.select("talent", "successes").rows() == [(10.0, 2)]
+    plain = availability_rows(talent, seasons, sched, date(2023, 9, 10))[1]
+    assert survival.sort(survival.columns).equals(plain.sort(plain.columns))  # survival unchanged
+
+
 def test_later_seasons_change_nothing():
     """No lookahead: seasons ending after `as_of` add no training rows."""
     as_of = date(2023, 1, 15)
@@ -80,3 +94,25 @@ def test_later_seasons_change_nothing():
     )
     for a, b in zip(base, later):
         assert a.sort(a.columns).equals(b.sort(b.columns))
+
+
+def test_talent_hinge_flattens_games_above_the_knot():
+    rng = np.random.default_rng(2)
+    n = 30_000
+    age, talent = rng.uniform(22, 30, n), rng.uniform(0, 20, n)
+    # True share rises with talent up to 10, then stays flat.
+    p = _sigmoid(-1.0 + 0.3 * np.minimum(talent, 10.0))
+    games = rng.binomial(17, p)
+    rows = pl.DataFrame({"position": ["RB"] * n, "age": age, "talent": talent, "successes": games, "trials": [17] * n})
+    straight = fit_games(rows, None, False, False)
+    hinged = fit_games(rows, 10.0, False, False)
+    elite = np.array([[26.0]]), np.array([[19.0]])
+    draws = lambda f, knot: AvailabilityDraws({"RB": f.coef[None]}, {"RB": 1.0}, {"RB": certain_coefs()}, 17,
+                                              games_knot={"RB": knot} if knot else {})
+    truth = _sigmoid(-1.0 + 3.0)
+    assert abs(draws(hinged, 10.0).games_mean("RB", *elite)[0, 0] - truth) < 0.01
+    assert draws(straight, None).games_mean("RB", *elite)[0, 0] > truth + 0.02  # a straight line over-credits
+
+
+def certain_coefs() -> np.ndarray:
+    return np.array([[50.0, 0.0, 0.0, 0.0]])
