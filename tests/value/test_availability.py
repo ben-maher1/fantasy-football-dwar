@@ -62,6 +62,20 @@ def test_rows_use_only_completed_seasons():
     assert season_games(sched).filter(pl.col("season") == 2023)["games"].item() == 3
 
 
+def test_lagged_rows_pair_games_with_last_seasons_talent():
+    sched = schedules([2021, 2022], in_progress=2023)
+    talent = pl.DataFrame({
+        "player_id": ["P", "P", "Q"], "season": [2021, 2022, 2022], "position": ["WR"] * 3,
+        "games_played": [3, 2, 3], "talent_mean": [10.0, 11.0, 6.0],
+    })
+    seasons = talent.select("player_id", "season", age_sept1=pl.lit(25.0))
+    games, survival = availability_rows(talent, seasons, sched, date(2023, 9, 10), lagged=True)
+    # Only P's 2022 has a season before it; it carries 2021's talent.
+    assert games.select("talent", "successes").rows() == [(10.0, 2)]
+    plain = availability_rows(talent, seasons, sched, date(2023, 9, 10))[1]
+    assert survival.sort(survival.columns).equals(plain.sort(plain.columns))  # survival unchanged
+
+
 def test_later_seasons_change_nothing():
     """No lookahead: seasons ending after `as_of` add no training rows."""
     as_of = date(2023, 1, 15)

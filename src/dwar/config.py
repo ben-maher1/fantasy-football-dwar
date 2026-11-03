@@ -130,6 +130,7 @@ class ValueConfig(_Frozen):
     short_by_role: tuple[str, ...] = ()      # positions whose short-game chance depends on preseason role
     injury_history: bool = False             # injury history in the games model + current-status cut
     games_hinge_quantile: float | None = None  # games model: talent stops adding games above this quantile
+    games_lagged_talent: bool = False        # games model trained on last season's talent
 
 
 def _read_yaml(path: Path) -> dict:

@@ -48,10 +48,11 @@ DEV = tuple(range(2013, 2023))
 HOLDOUT = (2023, 2024, 2025)
 CHECKPOINTS = (4, 8, 12)
 RELEVANT_PPG = 8.0
-# name -> (talent hinge, injury totals, body-part groups)
+# name -> (talent hinge, injury totals, body-part groups, trained on last season's talent)
 GAMES_VARIANTS = {
-    "base": (False, False, False), "hinge": (True, False, False), "injury": (False, True, False),
-    "hinge_injury": (True, True, False), "hinge_injury_groups": (True, True, True),
+    "base": (False, False, False, False), "hinge": (True, False, False, False),
+    "injury": (False, True, False, False), "hinge_injury": (True, True, False, False),
+    "hinge_injury_groups": (True, True, True, False), "hinge_injury_lagged": (True, True, False, True),
 }
 SURVIVAL_VARIANTS = ("base", "injury")
 COEF_NAMES = ("const", "age", "age2", "talent", "talent_above_knot", *INJURY_TOTALS, *INJURY_GROUP_TERMS)
@@ -85,6 +86,8 @@ def season_forecast(seasons_tbl: pl.DataFrame, inj: pl.DataFrame, schedules: pl.
     start = schedules.filter(pl.col("season") == t)["gameday"].min()
     known, talent, inj_known = _known(seasons_tbl, inj, t)
     games_rows, _ = availability_rows(talent, known, schedules, start - timedelta(days=1), inj_known, groups=True)
+    lag_rows, _ = availability_rows(talent, known, schedules, start - timedelta(days=1), inj_known, groups=True,
+                                    lagged=True)
     n_t = int(season_games(schedules).filter(pl.col("season") == t)["games"].item())
 
     prev = known.filter((pl.col("season") == t - 1) & (pl.col("games_played") > 0) & pl.col("age_sept1").is_not_null())
@@ -113,12 +116,15 @@ def season_forecast(seasons_tbl: pl.DataFrame, inj: pl.DataFrame, schedules: pl.
         y = pr["games_t"].fill_null(0).to_numpy()
         played, rel = y > 0, tal >= RELEVANT_PPG
         y_g = np.minimum(y[played], n_t)
-        g_inj = np.array(g["injury"].to_list())
-        knot = float(g["talent"].quantile(HINGE_QUANTILE))
-        res: dict = {"coef": {}, "knot": knot}
-        for name, (hinge, use_inj, groups) in GAMES_VARIANTS.items():
+        g_lag = lag_rows.filter(pl.col("position") == p)
+        knots = {False: float(g["talent"].quantile(HINGE_QUANTILE)), True: float(g_lag["talent"].quantile(HINGE_QUANTILE))}
+        res: dict = {"coef": {}, "knot": knots[False], "knot_lagged": knots[True]}
+        for name, (hinge, use_inj, groups, lagged) in GAMES_VARIANTS.items():
+            src = g_lag if lagged else g
+            knot = knots[lagged]
             cols = slice(None) if groups else slice(0, n_tot)
-            rows = g.with_columns(injury=pl.Series(g_inj[:, cols].tolist(), dtype=pl.List(pl.Float64)))
+            rows = src.with_columns(injury=pl.Series(np.array(src["injury"].to_list())[:, cols].tolist(),
+                                                     dtype=pl.List(pl.Float64)))
             fit = fit_games(rows, knot if hinge else None, use_inj, groups)
             x = _design(age + 1.0, tal, terms[mask][:, cols] if use_inj else None, knot if hinge else None)[played]
             p_g = np.clip(_sigmoid(x @ fit.coef), 1e-6, 1 - 1e-6)
@@ -126,6 +132,7 @@ def season_forecast(seasons_tbl: pl.DataFrame, inj: pl.DataFrame, schedules: pl.
             res |= _sums(f"games_{name}", rel[played], {
                 f"games_ls_{name}": betabinom.logpmf(y_g, n_t, p_g * k, (1 - p_g) * k),
                 f"games_ae_{name}": np.abs(n_t * p_g - y_g),
+                f"games_err_{name}": n_t * p_g - y_g,
             })
             res["coef"][name] = fit.coef.round(4).tolist()
 
@@ -149,12 +156,13 @@ def status_forecast(
     weeks: pl.DataFrame, seasons_tbl: pl.DataFrame, inj: pl.DataFrame, schedules: pl.DataFrame, t: int,
 ) -> dict:
     """Rest-of-season games from weeks 4/8/12 of t, with and without the
-    current-status factor (both on the hinge + injury games model)."""
+    current-status factor (both on the hinge + injury games model trained
+    on last season's talent)."""
     effects = status_effects(weeks, list(range(FIRST_SEASON, t)))
     rows = status_rows(weeks, [t]).filter(pl.col("week").is_in(CHECKPOINTS))
     start = schedules.filter(pl.col("season") == t)["gameday"].min()
     known, talent, inj_known = _known(seasons_tbl, inj, t)
-    games_rows, _ = availability_rows(talent, known, schedules, start - timedelta(days=1), inj_known)
+    games_rows, _ = availability_rows(talent, known, schedules, start - timedelta(days=1), inj_known, lagged=True)
     prev = known.filter(pl.col("season") == t - 1).select("player_id", "position", "age_sept1", "fpts_per_game")
     rows = rows.join(prev, on="player_id", how="inner").filter(pl.col("age_sept1").is_not_null())
     terms = injury_history_terms(rows.select("player_id", t=pl.lit(t)), inj_known)
@@ -185,14 +193,15 @@ def _total(per_season: dict, seasons: tuple[int, ...], positions: tuple[str, ...
     for t in seasons:
         for p in positions:
             for k, v in per_season[t].get(p, {}).items():
-                if not isinstance(v, float) or k.endswith("_rel") != rel or k == "knot":
+                if not isinstance(v, float) or k.endswith("_rel") != rel or k.startswith("knot"):
                     continue
                 key = k.removesuffix("_rel")
                 acc[key] = acc.get(key, 0.0) + v
     games = {}
     for v in GAMES_VARIANTS:
         n = max(acc.get(f"n_games_{v}", 0.0), 1.0)
-        games[v] = {"logscore": acc.get(f"games_ls_{v}", 0.0) / n, "mae": acc.get(f"games_ae_{v}", 0.0) / n, "n": int(n)}
+        games[v] = {"logscore": acc.get(f"games_ls_{v}", 0.0) / n, "mae": acc.get(f"games_ae_{v}", 0.0) / n,
+                    "bias": acc.get(f"games_err_{v}", 0.0) / n, "n": int(n)}
     n = max(acc.get("n_survival", 0.0), 1.0)
     survival = {v: {"logloss": acc.get(f"surv_ll_{v}", 0.0) / n, "n": int(n)} for v in SURVIVAL_VARIANTS}
     return {"games": games, "survival": survival}

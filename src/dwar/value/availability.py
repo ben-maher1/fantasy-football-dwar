@@ -21,6 +21,8 @@ model out of sample (validate/injury.py):
   position's 75th percentile of talent among training rows). A straight
   line in talent credited elite players with nearly every game, which
   history does not show (top RBs average about 13 of 17).
+- lagged talent: games in season s are paired with talent from s - 1, the
+  way a projection uses them (see `availability_rows`).
 - injury history: weeks missed to injury in seasons t - 1 and t - 2 for
   the season t being predicted. Body-part terms were tested and did not
   help, so only totals are used by default (`injury_groups` turns the body
@@ -228,7 +230,7 @@ def injury_history_terms(keys: pl.DataFrame, injury: pl.DataFrame, groups: bool 
 
 def availability_rows(
     talent: pl.DataFrame, player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of,
-    injury: pl.DataFrame | None = None, groups: bool = False,
+    injury: pl.DataFrame | None = None, groups: bool = False, lagged: bool = False,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Training rows for the games and survival models.
 
@@ -236,19 +238,26 @@ def availability_rows(
     per player-season). Returns (games_rows, survival_rows), each with
     position, age, talent, successes, trials. With `injury` (the
     injury_seasons table) games rows start once two seasons of reports
-    exist and carry an `injury` column of injury terms."""
+    exist and carry an `injury` column of injury terms. With `lagged`, games
+    rows pair each season's games with the player's talent the season before
+    (players with no season before are left out)."""
     seasons = season_games(schedules).filter(pl.col("last_gameday") < as_of)
     complete = seasons["season"]
     base = talent.join(player_seasons.select("player_id", "season", "age_sept1"), on=["player_id", "season"]).filter(
         pl.col("age_sept1").is_not_null()
     )
-    games = (
-        base.join(seasons, on="season")
-        .filter(pl.col("games_played") > 0)
-        .select(
-            "player_id", "season", "position", age="age_sept1", talent="talent_mean",
-            successes=pl.min_horizontal("games_played", "games"), trials="games",
+    games = base.join(seasons, on="season").filter(pl.col("games_played") > 0)
+    if lagged:
+        # Talent from the season before, as a projection knows it. Same-season
+        # talent is estimated from the very games being predicted, which
+        # overstated games for good players by about one a season.
+        prior = talent.filter(pl.col("games_played") > 0).select(
+            "player_id", season=pl.col("season") + 1, prior_talent="talent_mean"
         )
+        games = games.join(prior, on=["player_id", "season"], how="inner").with_columns(talent_mean="prior_talent")
+    games = games.select(
+        "player_id", "season", "position", age="age_sept1", talent="talent_mean",
+        successes=pl.min_horizontal("games_played", "games"), trials="games",
     )
     played = talent.filter(pl.col("games_played") > 0).select("player_id", "season").unique()
     survival = (
@@ -291,10 +300,13 @@ def fit_games(rows: pl.DataFrame, knot: float | None, injury: bool, groups: bool
 def fit_availability(
     talent: pl.DataFrame, player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of,
     injury: pl.DataFrame | None = None, hinge_quantile: float | None = None, injury_groups: bool = False,
+    lagged: bool = False,
 ) -> AvailabilityModel:
     """Games and survival models per position. `injury` (injury_seasons) adds
     injury terms to the games model; `hinge_quantile` its talent hinge."""
-    games_rows, survival_rows = availability_rows(talent, player_seasons, schedules, as_of, injury, injury_groups)
+    games_rows, survival_rows = availability_rows(
+        talent, player_seasons, schedules, as_of, injury, injury_groups, lagged
+    )
     games, survival, knots = {}, {}, {}
     for (position,), r in games_rows.sort("position").group_by("position", maintain_order=True):
         if hinge_quantile is not None:

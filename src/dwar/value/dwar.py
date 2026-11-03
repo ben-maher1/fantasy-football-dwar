@@ -163,7 +163,7 @@ def value_inputs(
         )
     availability = fit_availability(
         talent, tables.player_seasons, schedules, tables.as_of, injury.seasons if injury else None,
-        cfg.games_hinge_quantile,
+        cfg.games_hinge_quantile, lagged=cfg.games_lagged_talent,
     ).draw(len(idx), rng)
     situation = situation or {}
 
