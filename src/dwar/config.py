@@ -128,6 +128,8 @@ class ValueConfig(_Frozen):
     calibrate_spread: tuple[str, ...] = ()   # positions whose backtest learns a spread factor
     spread_factor: dict[str, float] = {}     # weekly runs: factor per position (value/spread.py)
     short_by_role: tuple[str, ...] = ()      # positions whose short-game chance depends on preseason role
+    injury_history: bool = False             # injury history in the games model + current-status cut
+    games_hinge_quantile: float | None = None  # games model: talent stops adding games above this quantile
 
 
 def _read_yaml(path: Path) -> dict:

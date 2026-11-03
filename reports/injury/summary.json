@@ -1,0 +1,961 @@
+{
+  "scoring": "half_ppr",
+  "relevant_ppg": 8.0,
+  "dev_seasons": [
+    2013,
+    2014,
+    2015,
+    2016,
+    2017,
+    2018,
+    2019,
+    2020,
+    2021,
+    2022
+  ],
+  "holdout_seasons": [
+    2023,
+    2024,
+    2025
+  ],
+  "dev": {
+    "all": {
+      "games": {
+        "base": {
+          "logscore": -2.5691608288225267,
+          "mae": 3.922412089385198,
+          "n": 4379
+        },
+        "hinge": {
+          "logscore": -2.5593087664482095,
+          "mae": 3.881881732091947,
+          "n": 4379
+        },
+        "injury": {
+          "logscore": -2.571220827743616,
+          "mae": 3.9274936282944584,
+          "n": 4379
+        },
+        "hinge_injury": {
+          "logscore": -2.561075379476027,
+          "mae": 3.887367804960258,
+          "n": 4379
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.5638092299451958,
+          "mae": 3.8943396536114916,
+          "n": 4379
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.5023400611385912,
+          "n": 5915
+        },
+        "injury": {
+          "logloss": 0.5048034563491457,
+          "n": 5915
+        }
+      }
+    },
+    "QB_all": {
+      "games": {
+        "base": {
+          "logscore": -2.595322898395235,
+          "mae": 3.4806509440812077,
+          "n": 578
+        },
+        "hinge": {
+          "logscore": -2.5793768646145,
+          "mae": 3.4048223452101807,
+          "n": 578
+        },
+        "injury": {
+          "logscore": -2.5973706589852297,
+          "mae": 3.4681873173353543,
+          "n": 578
+        },
+        "hinge_injury": {
+          "logscore": -2.579237268042352,
+          "mae": 3.39010812064094,
+          "n": 578
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.5740742010562667,
+          "mae": 3.3917513374340436,
+          "n": 578
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.48184139967908035,
+          "n": 750
+        },
+        "injury": {
+          "logloss": 0.4824977027268066,
+          "n": 750
+        }
+      }
+    },
+    "RB_all": {
+      "games": {
+        "base": {
+          "logscore": -2.6739433526649656,
+          "mae": 4.084975613275019,
+          "n": 1169
+        },
+        "hinge": {
+          "logscore": -2.665984656879123,
+          "mae": 4.081691066911843,
+          "n": 1169
+        },
+        "injury": {
+          "logscore": -2.6776421169871654,
+          "mae": 4.095158212234388,
+          "n": 1169
+        },
+        "hinge_injury": {
+          "logscore": -2.6689809089882885,
+          "mae": 4.0921041820858415,
+          "n": 1169
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.6765431206433448,
+          "mae": 4.100767033425975,
+          "n": 1169
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.5088178229225884,
+          "n": 1587
+        },
+        "injury": {
+          "logloss": 0.51290382956159,
+          "n": 1587
+        }
+      }
+    },
+    "WR_all": {
+      "games": {
+        "base": {
+          "logscore": -2.524815509410396,
+          "mae": 3.8622692584051674,
+          "n": 1675
+        },
+        "hinge": {
+          "logscore": -2.5135650550477004,
+          "mae": 3.847749824964157,
+          "n": 1675
+        },
+        "injury": {
+          "logscore": -2.5254294809782705,
+          "mae": 3.8665211388380336,
+          "n": 1675
+        },
+        "hinge_injury": {
+          "logscore": -2.514075209369984,
+          "mae": 3.8527559648661924,
+          "n": 1675
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.514946780914561,
+          "mae": 3.8583273701155405,
+          "n": 1675
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.49420461784487896,
+          "n": 2281
+        },
+        "injury": {
+          "logloss": 0.49696666042231735,
+          "n": 2281
+        }
+      }
+    },
+    "TE_all": {
+      "games": {
+        "base": {
+          "logscore": -2.502981062292204,
+          "mae": 4.095913055372712,
+          "n": 957
+        },
+        "hinge": {
+          "logscore": -2.4969443358755856,
+          "mae": 3.98567918000443,
+          "n": 957
+        },
+        "injury": {
+          "logscore": -2.5055775845342025,
+          "mae": 4.10681240462476,
+          "n": 957
+        },
+        "hinge_injury": {
+          "logscore": -2.500559339075245,
+          "mae": 3.9981871412552605,
+          "n": 957
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.5054242044467365,
+          "mae": 4.0087628663629555,
+          "n": 957
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.5205750143354972,
+          "n": 1297
+        },
+        "injury": {
+          "logloss": 0.521572735021236,
+          "n": 1297
+        }
+      }
+    },
+    "relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.4526037720816136,
+          "mae": 3.1459578968420034,
+          "n": 1431
+        },
+        "hinge": {
+          "logscore": -2.361951343461526,
+          "mae": 3.1250999113138964,
+          "n": 1431
+        },
+        "injury": {
+          "logscore": -2.4524823550770702,
+          "mae": 3.139987967244478,
+          "n": 1431
+        },
+        "hinge_injury": {
+          "logscore": -2.3604282303271233,
+          "mae": 3.1166673222808137,
+          "n": 1431
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.362116937843603,
+          "mae": 3.123321308297367,
+          "n": 1431
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.27406670584876097,
+          "n": 1561
+        },
+        "injury": {
+          "logloss": 0.27444820771805456,
+          "n": 1561
+        }
+      }
+    },
+    "QB_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.4587269935559384,
+          "mae": 3.711557786754107,
+          "n": 395
+        },
+        "hinge": {
+          "logscore": -2.4495924506080438,
+          "mae": 3.615694928081724,
+          "n": 395
+        },
+        "injury": {
+          "logscore": -2.454912297456249,
+          "mae": 3.682262364844544,
+          "n": 395
+        },
+        "hinge_injury": {
+          "logscore": -2.4413473800806265,
+          "mae": 3.578874096792767,
+          "n": 395
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.4303573149015736,
+          "mae": 3.583866488453832,
+          "n": 395
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.3295208017639853,
+          "n": 447
+        },
+        "injury": {
+          "logloss": 0.32795348709898464,
+          "n": 447
+        }
+      }
+    },
+    "RB_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.568951834584578,
+          "mae": 3.3525365391069055,
+          "n": 391
+        },
+        "hinge": {
+          "logscore": -2.494712253071317,
+          "mae": 3.360655830220073,
+          "n": 391
+        },
+        "injury": {
+          "logscore": -2.573134564417865,
+          "mae": 3.3557052659910305,
+          "n": 391
+        },
+        "hinge_injury": {
+          "logscore": -2.4976274779959455,
+          "mae": 3.3607800958698064,
+          "n": 391
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.5082849489100068,
+          "mae": 3.373214463923603,
+          "n": 391
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.28034573515784766,
+          "n": 426
+        },
+        "injury": {
+          "logloss": 0.27991616302722916,
+          "n": 426
+        }
+      }
+    },
+    "WR_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.3141377090823596,
+          "mae": 2.6096183411661236,
+          "n": 527
+        },
+        "hinge": {
+          "logscore": -2.206666037065988,
+          "mae": 2.6308346984931084,
+          "n": 527
+        },
+        "injury": {
+          "logscore": -2.3129892800580234,
+          "mae": 2.609368822099423,
+          "n": 527
+        },
+        "hinge_injury": {
+          "logscore": -2.205928145833316,
+          "mae": 2.6306709971051783,
+          "n": 527
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.2098839894952262,
+          "mae": 2.6379066716172517,
+          "n": 527
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.24456767749624583,
+          "n": 564
+        },
+        "injury": {
+          "logloss": 0.24684522414200602,
+          "n": 564
+        }
+      }
+    },
+    "TE_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.664983859196793,
+          "mae": 2.9634726443024437,
+          "n": 118
+        },
+        "hinge": {
+          "logscore": -2.3221852713441247,
+          "mae": 2.9097640743727804,
+          "n": 118
+        },
+        "injury": {
+          "logscore": -2.6675502317127626,
+          "mae": 2.979754396308188,
+          "n": 118
+        },
+        "hinge_injury": {
+          "logscore": -2.324950048438091,
+          "mae": 2.931076584670984,
+          "n": 118
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.3292366201718475,
+          "mae": 2.92154116862582,
+          "n": 118
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.1867651302926501,
+          "n": 124
+        },
+        "injury": {
+          "logloss": 0.18833428749149958,
+          "n": 124
+        }
+      }
+    },
+    "status": {
+      "base": {
+        "mae": 2.169362872742701,
+        "logscore": -2.1714747063944957,
+        "n": 10355
+      },
+      "status": {
+        "mae": 2.074225656403411,
+        "logscore": -2.11476691796866,
+        "n": 10355
+      },
+      "n_injured": 1017
+    }
+  },
+  "holdout": {
+    "all": {
+      "games": {
+        "base": {
+          "logscore": -2.6171841248925767,
+          "mae": 4.02887792346234,
+          "n": 1421
+        },
+        "hinge": {
+          "logscore": -2.593019011247335,
+          "mae": 3.951376880982494,
+          "n": 1421
+        },
+        "injury": {
+          "logscore": -2.6154927104604844,
+          "mae": 4.024634892491926,
+          "n": 1421
+        },
+        "hinge_injury": {
+          "logscore": -2.5909294940951546,
+          "mae": 3.943264888492029,
+          "n": 1421
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.59361246209883,
+          "mae": 3.952757362752832,
+          "n": 1421
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.460704722898779,
+          "n": 1895
+        },
+        "injury": {
+          "logloss": 0.4621001688242027,
+          "n": 1895
+        }
+      }
+    },
+    "QB_all": {
+      "games": {
+        "base": {
+          "logscore": -2.7986420777263232,
+          "mae": 3.8232332766977155,
+          "n": 193
+        },
+        "hinge": {
+          "logscore": -2.8033367994066327,
+          "mae": 3.8313221714413896,
+          "n": 193
+        },
+        "injury": {
+          "logscore": -2.795230538474759,
+          "mae": 3.8134551736457327,
+          "n": 193
+        },
+        "hinge_injury": {
+          "logscore": -2.7996463895850274,
+          "mae": 3.8206457232845423,
+          "n": 193
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.804950529293753,
+          "mae": 3.840371612593455,
+          "n": 193
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.41937376639964774,
+          "n": 247
+        },
+        "injury": {
+          "logloss": 0.42453386063624954,
+          "n": 247
+        }
+      }
+    },
+    "RB_all": {
+      "games": {
+        "base": {
+          "logscore": -2.63183047554875,
+          "mae": 4.350149345970504,
+          "n": 355
+        },
+        "hinge": {
+          "logscore": -2.6504009612980157,
+          "mae": 4.3686219438587655,
+          "n": 355
+        },
+        "injury": {
+          "logscore": -2.6290313138675323,
+          "mae": 4.345760594925948,
+          "n": 355
+        },
+        "hinge_injury": {
+          "logscore": -2.647615750191772,
+          "mae": 4.359687846084418,
+          "n": 355
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.644880084964728,
+          "mae": 4.35003363113079,
+          "n": 355
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.5010186040135619,
+          "n": 487
+        },
+        "injury": {
+          "logloss": 0.5033570080607541,
+          "n": 487
+        }
+      }
+    },
+    "WR_all": {
+      "games": {
+        "base": {
+          "logscore": -2.6226467583999864,
+          "mae": 3.8060956116538516,
+          "n": 549
+        },
+        "hinge": {
+          "logscore": -2.5774978740025407,
+          "mae": 3.711724520010786,
+          "n": 549
+        },
+        "injury": {
+          "logscore": -2.62266260587724,
+          "mae": 3.8102975064689177,
+          "n": 549
+        },
+        "hinge_injury": {
+          "logscore": -2.577117348729097,
+          "mae": 3.7138653992375072,
+          "n": 549
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.5795432502802633,
+          "mae": 3.7277310687108467,
+          "n": 549
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.4526038107081036,
+          "n": 746
+        },
+        "injury": {
+          "logloss": 0.45313342158646785,
+          "n": 746
+        }
+      }
+    },
+    "TE_all": {
+      "games": {
+        "base": {
+          "logscore": -2.4837896027462083,
+          "mae": 4.176858019197011,
+          "n": 324
+        },
+        "hinge": {
+          "logscore": -2.4311646253357773,
+          "mae": 3.971801905037512,
+          "n": 324
+        },
+        "injury": {
+          "logscore": -2.481443705522038,
+          "mae": 4.1617623193433735,
+          "n": 324
+        },
+        "hinge_injury": {
+          "logscore": -2.4278951918177514,
+          "mae": 3.9487453469502998,
+          "n": 324
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.4353894503777784,
+          "mae": 3.9657104798381244,
+          "n": 324
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.4525581365051165,
+          "n": 415
+        },
+        "injury": {
+          "logloss": 0.4521627973870319,
+          "n": 415
+        }
+      }
+    },
+    "relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.5648046996552707,
+          "mae": 3.179013705814745,
+          "n": 444
+        },
+        "hinge": {
+          "logscore": -2.4699488044801874,
+          "mae": 3.153698344481845,
+          "n": 444
+        },
+        "injury": {
+          "logscore": -2.5584045043085646,
+          "mae": 3.1685401375655387,
+          "n": 444
+        },
+        "hinge_injury": {
+          "logscore": -2.4621207058718726,
+          "mae": 3.1400520037898545,
+          "n": 444
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.4627805396878677,
+          "mae": 3.1375509256989123,
+          "n": 444
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.1544893222804387,
+          "n": 463
+        },
+        "injury": {
+          "logloss": 0.15572478971659628,
+          "n": 463
+        }
+      }
+    },
+    "QB_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.7404314074145875,
+          "mae": 4.169673394328226,
+          "n": 137
+        },
+        "hinge": {
+          "logscore": -2.7452478341144166,
+          "mae": 4.1800109706847834,
+          "n": 137
+        },
+        "injury": {
+          "logscore": -2.730517491655942,
+          "mae": 4.1495120666538,
+          "n": 137
+        },
+        "hinge_injury": {
+          "logscore": -2.7349336869499887,
+          "mae": 4.158957908006027,
+          "n": 137
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.741952135358174,
+          "mae": 4.189196050633026,
+          "n": 137
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.25735740336191837,
+          "n": 149
+        },
+        "injury": {
+          "logloss": 0.25985102243815206,
+          "n": 149
+        }
+      }
+    },
+    "RB_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.362064870482245,
+          "mae": 2.8398560066006144,
+          "n": 117
+        },
+        "hinge": {
+          "logscore": -2.3381083161862692,
+          "mae": 2.8894771101276167,
+          "n": 117
+        },
+        "injury": {
+          "logscore": -2.3554852221431477,
+          "mae": 2.8296348526282875,
+          "n": 117
+        },
+        "hinge_injury": {
+          "logscore": -2.3287744000112887,
+          "mae": 2.873456922366312,
+          "n": 117
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.3273082814162134,
+          "mae": 2.862956080427457,
+          "n": 117
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.18529284049784822,
+          "n": 123
+        },
+        "injury": {
+          "logloss": 0.18735038029569792,
+          "n": 123
+        }
+      }
+    },
+    "WR_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.5190743635228396,
+          "mae": 2.6800681442931538,
+          "n": 157
+        },
+        "hinge": {
+          "logscore": -2.348190380745649,
+          "mae": 2.5979732290106443,
+          "n": 157
+        },
+        "injury": {
+          "logscore": -2.5160123034453687,
+          "mae": 2.678795827807693,
+          "n": 157
+        },
+        "hinge_injury": {
+          "logscore": -2.3441600041830677,
+          "mae": 2.5952216413699,
+          "n": 157
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.3409461830116736,
+          "mae": 2.575901990899692,
+          "n": 157
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.05747267446459635,
+          "n": 158
+        },
+        "injury": {
+          "logloss": 0.05719930199797902,
+          "n": 158
+        }
+      }
+    },
+    "TE_relevant": {
+      "games": {
+        "base": {
+          "logscore": -2.772058148837378,
+          "mae": 2.6425145131055503,
+          "n": 33
+        },
+        "hinge": {
+          "logscore": -2.3737500952929644,
+          "mae": 2.473634640197632,
+          "n": 33
+        },
+        "injury": {
+          "logscore": -2.765000028014163,
+          "mae": 2.6275892492185093,
+          "n": 33
+        },
+        "hinge_injury": {
+          "logscore": -2.3635137223303113,
+          "mae": 2.447321171937481,
+          "n": 33
+        },
+        "hinge_injury_groups": {
+          "logscore": -2.3637423460246603,
+          "mae": 2.4172811543129815,
+          "n": 33
+        }
+      },
+      "survival": {
+        "base": {
+          "logloss": 0.039715186917446445,
+          "n": 33
+        },
+        "injury": {
+          "logloss": 0.03942996374084472,
+          "n": 33
+        }
+      }
+    },
+    "status": {
+      "base": {
+        "mae": 2.3297791484287886,
+        "logscore": -2.3238257871630066,
+        "n": 3399
+      },
+      "status": {
+        "mae": 2.2429609620828623,
+        "logscore": -2.2732494189545367,
+        "n": 3399
+      },
+      "n_injured": 343
+    }
+  },
+  "weights_latest": {
+    "QB": {
+      "knot": 15.51,
+      "hinge_injury": {
+        "const": -1.7909,
+        "age": -0.0317,
+        "age2": 0.0037,
+        "talent": 0.1859,
+        "talent_above_knot": -0.0063,
+        "injury_last": 0.0212,
+        "injury_prior": -0.1052
+      },
+      "hinge_injury_groups": {
+        "const": -1.7895,
+        "age": -0.0326,
+        "age2": 0.0037,
+        "talent": 0.1859,
+        "talent_above_knot": -0.0068,
+        "injury_last": 0.0355,
+        "injury_prior": -0.1066,
+        "injury_last_knee": -0.1364,
+        "injury_last_ankle_foot": 0.0487,
+        "injury_last_soft_tissue": 0.038,
+        "injury_last_concussion": -0.0083,
+        "injury_last_hip_back": 0.0058,
+        "injury_last_shoulder": 0.0547,
+        "injury_last_achilles": 0.2039,
+        "injury_last_hand_arm": 0.0547,
+        "injury_last_torso": 0.0026,
+        "injury_last_leg_bone": -0.164,
+        "injury_last_other": -0.0996
+      }
+    },
+    "RB": {
+      "knot": 8.54,
+      "hinge_injury": {
+        "const": -0.1724,
+        "age": 0.0583,
+        "age2": -0.004,
+        "talent": 0.1974,
+        "talent_above_knot": -0.1724,
+        "injury_last": -0.0662,
+        "injury_prior": -0.0509
+      },
+      "hinge_injury_groups": {
+        "const": -0.1692,
+        "age": 0.0598,
+        "age2": -0.0035,
+        "talent": 0.1956,
+        "talent_above_knot": -0.1696,
+        "injury_last": -0.0575,
+        "injury_prior": -0.0597,
+        "injury_last_knee": 0.0907,
+        "injury_last_ankle_foot": 0.0828,
+        "injury_last_soft_tissue": -0.0449,
+        "injury_last_concussion": -0.3924,
+        "injury_last_hip_back": -0.0064,
+        "injury_last_shoulder": 0.2503,
+        "injury_last_achilles": 0.3139,
+        "injury_last_hand_arm": -0.2059,
+        "injury_last_torso": -0.233,
+        "injury_last_leg_bone": 0.2035,
+        "injury_last_other": -0.0587
+      }
+    },
+    "WR": {
+      "knot": 7.73,
+      "hinge_injury": {
+        "const": -0.2746,
+        "age": 0.0209,
+        "age2": -0.0027,
+        "talent": 0.2928,
+        "talent_above_knot": -0.2928,
+        "injury_last": -0.0156,
+        "injury_prior": -0.034
+      },
+      "hinge_injury_groups": {
+        "const": -0.2766,
+        "age": 0.0203,
+        "age2": -0.0026,
+        "talent": 0.292,
+        "talent_above_knot": -0.2907,
+        "injury_last": 0.0317,
+        "injury_prior": -0.0339,
+        "injury_last_knee": 0.087,
+        "injury_last_ankle_foot": -0.1137,
+        "injury_last_soft_tissue": -0.0273,
+        "injury_last_concussion": 0.0983,
+        "injury_last_hip_back": -0.1198,
+        "injury_last_shoulder": 0.0526,
+        "injury_last_achilles": 0.1504,
+        "injury_last_hand_arm": -0.1437,
+        "injury_last_torso": 0.0167,
+        "injury_last_leg_bone": 0.0873,
+        "injury_last_other": -0.0877
+      }
+    },
+    "TE": {
+      "knot": 4.51,
+      "hinge_injury": {
+        "const": -0.0456,
+        "age": 0.053,
+        "age2": -0.0005,
+        "talent": 0.4504,
+        "talent_above_knot": -0.4967,
+        "injury_last": -0.0978,
+        "injury_prior": -0.0051
+      },
+      "hinge_injury_groups": {
+        "const": -0.0478,
+        "age": 0.0526,
+        "age2": -0.0003,
+        "talent": 0.4497,
+        "talent_above_knot": -0.4928,
+        "injury_last": -0.0434,
+        "injury_prior": -0.008,
+        "injury_last_knee": -0.0262,
+        "injury_last_ankle_foot": -0.0139,
+        "injury_last_soft_tissue": -0.0405,
+        "injury_last_concussion": 0.0087,
+        "injury_last_hip_back": -0.2521,
+        "injury_last_shoulder": 0.2161,
+        "injury_last_achilles": 0.4051,
+        "injury_last_hand_arm": -0.1851,
+        "injury_last_torso": -0.4127,
+        "injury_last_leg_bone": 0.3731,
+        "injury_last_other": -0.0724
+      }
+    }
+  }
+}

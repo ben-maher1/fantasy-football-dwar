@@ -82,6 +82,32 @@ def test_below_replacement_is_worth_zero_not_negative():
     np.testing.assert_array_equal(d, 0.0)
 
 
+def test_current_injury_cuts_only_this_season():
+    from dwar.features.injuries import GROUPS
+    from dwar.value.dwar import InjuryInputs
+
+    n = 20
+    clock = SeasonClock(current=2026, complete=(2025,), games=17, remaining={"AAA": 10}, remaining_default=10)
+    games = np.tile([50.0, 0.0, 0.0, 0.0, 0.0, 0.0], (n, 1))  # certain, with two injury terms
+    av = AvailabilityDraws({"WR": games}, {"WR": 1.0}, {"WR": certain(n)}, 17, injury=True, injury_share={"WR": 1.0})
+    seasons = pl.DataFrame({"player_id": ["P"], "season": [2026], "team_games": [7], "missed": [5]}).with_columns(
+        **{f"missed_{g}": pl.lit(5 if g == "knee" else 0) for g in GROUPS})
+    status = pl.DataFrame({"player_id": ["P"], "injured": [True], "reserve": [True], "streak": [5]})
+    injury = InjuryInputs(seasons, status, {("reserve_4plus", 2): 0.25})
+    inputs = ValueInputs(clock, {"WR": const_draws(n, [15.0])}, {"WR": np.full(n, 10.0)}, 25.0, av, injury=injury)
+    r = SimpleNamespace(data=SimpleNamespace(
+        ps_keys=pl.DataFrame({"player_id": ["P"], "season": [2026], "games_played": [2]}), ps_age_c=np.array([0.0]),
+    ))
+    tables = SimpleNamespace(player_static=pl.DataFrame(
+        {"player_id": ["P"], "name": ["Pat"], "team": ["AAA"], "age_at_as_of": [26.1]}))
+    fmt = LeagueFormat(name="t", scoring="ppr", teams=2, lineup={"WR": 1}, discount=0.5)
+    cfg = ValueConfig(draws=n, horizon_seasons=1, replacement_seasons=1, pool_min_games=1)
+    _, d = position_dwar("WR", r, inputs, tables, fmt, cfg, np.random.default_rng(0))
+    w = wins_per_game(5.0, 25.0)
+    # On IR for 5 weeks with 10 left: a quarter of the remaining games; next season untouched.
+    np.testing.assert_allclose(d[:, 0], 0.25 * 10 * w + 0.5 * 17 * w, rtol=1e-5)
+
+
 def fake_fit(sim, position: str, rng: np.random.Generator, n_draws: int = 60) -> FitResult:
     """A FitResult whose posterior draws scatter around the simulated truth,
     so the value layer can run end to end without sampling."""

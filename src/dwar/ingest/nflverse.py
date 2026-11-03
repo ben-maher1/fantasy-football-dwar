@@ -54,6 +54,12 @@ PBP_COLUMNS = (
     "qb_epa", "passer_player_id", "receiver_player_id", "rusher_player_id", "pass_oe", "xpass",
 )
 
+INJURY_COLUMNS = (
+    "season", "game_type", "team", "week", "gsis_id", "position", "full_name",
+    "report_primary_injury", "report_secondary_injury", "report_status",
+    "practice_primary_injury", "practice_status",
+)
+
 
 @dataclass(frozen=True)
 class DatasetSpec:
@@ -80,6 +86,9 @@ DATASETS: dict[str, DatasetSpec] = {
     "depth_charts": DatasetSpec("load_depth_charts", first_season=2001, last_season=2024),
     "depth_charts_daily": DatasetSpec("load_depth_charts", first_season=2025, adds_season=True),
     "rosters_weekly": DatasetSpec("load_rosters_weekly", first_season=2002),
+    # Weekly injury reports. Columns vary by season (2026 drops date_modified),
+    # so only the shared ones are kept.
+    "injuries": DatasetSpec("load_injuries", first_season=2009, keep=INJURY_COLUMNS),
     "players": DatasetSpec("load_players", seasonal=False),
     "ff_playerids": DatasetSpec("load_ff_playerids", seasonal=False),
 }
