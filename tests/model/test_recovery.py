@@ -10,7 +10,7 @@ from dwar.config import load_model_config
 from dwar.model.fit import fit, sample
 from dwar.model.talent import scale_of
 
-from .simulate import SEASON_EFFECT, simulate
+from .simulate import SEASON_EFFECT, USAGE_TRUTH, simulate
 
 
 def interval(posterior, name: str, lo: float, hi: float) -> np.ndarray:
@@ -107,3 +107,34 @@ def test_same_seed_same_draws():
     a = sample(sim.data, cfg)["posterior"]["tau"].values
     b = sample(sim.data, cfg)["posterior"]["tau"].values
     np.testing.assert_array_equal(a, b)
+
+
+@pytest.fixture(scope="module")
+def recovered_usage(tmp_path_factory):
+    sim = simulate(n_players=300, usage=True, seed=17)
+    cfg = load_model_config().model_copy(update={"opportunity": ("WR",), "rookie_round1": ("WR",), "growth": ("WR",)})
+    return sim, fit(sim.data, cfg, tmp_path_factory.mktemp("fit_usage"))
+
+
+def test_usage_fit_recovers_growth_efficiency_and_opportunity(recovered_usage):
+    """Opportunity points, per-player efficiency, the first-round step and
+    career-year growth scaled by draft capital are all recovered."""
+    sim, result = recovered_usage
+    assert sim.data.x is not None and np.isfinite(sim.data.x).all()
+    assert result.diagnostics.passed, result.diagnostics.failures
+    for name, truth in sim.truth.items():
+        lo, hi = interval(result.posterior, name, 0.5, 99.5)
+        assert lo <= truth <= hi, f"{name}: {truth} outside 99% [{lo:.3f}, {hi:.3f}]"
+    for name in ("growth", "growth_pick"):
+        lo, hi = interval(result.posterior, name, 0.5, 99.5)
+        for j, truth in enumerate(USAGE_TRUTH[name]):
+            assert lo[j] <= truth <= hi[j], f"{name}[{j}]: {truth} outside [{lo[j]:.3f}, {hi[j]:.3f}]"
+    lo, hi = interval(result.posterior, "growth", 0.5, 99.5)
+    assert (lo > 0).all(), "real growth should be detected"
+
+
+def test_usage_talent_interval_coverage(recovered_usage):
+    sim, result = recovered_usage
+    t = result.talent
+    covered_90 = (t["talent_p05"].to_numpy() <= sim.talent) & (sim.talent <= t["talent_p95"].to_numpy())
+    assert 0.80 <= covered_90.mean() <= 0.97

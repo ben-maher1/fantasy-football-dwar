@@ -106,6 +106,13 @@ class ModelConfig(_Frozen):
     situation_range: dict[str, tuple[str, ...]] = {}
     # Per-position age curve (model/talent.py): quadratic (default) or hinge.
     age_curve: dict[str, Literal["quadratic", "hinge"]] = {}
+    # Usage and early-career terms (model/talent.py), each a list of positions:
+    # weekly opportunity points + per-player efficiency, a first-round step in
+    # the rookie prior, and career-year growth scaled by draft capital.
+    opportunity: tuple[str, ...] = ()
+    opportunity_years: int = 0  # >0: opportunity points only in career years 1..n
+    rookie_round1: tuple[str, ...] = ()
+    growth: tuple[str, ...] = ()
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)

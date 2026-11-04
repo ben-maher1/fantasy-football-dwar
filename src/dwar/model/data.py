@@ -46,6 +46,12 @@ class ModelData:
     pre_window: np.ndarray   # career began before the fitting window: no rookie prior
     prospect_x: np.ndarray   # (n_players, m) standardized prospect covariates
     prospect_x_names: tuple[str, ...]
+    round1: np.ndarray | None = None        # (n_players,) first-round pick, for the rookie prior's first-round step
+    # (n_ps,) 1 = rookie season (draft year, else first NFL season); 0 when the
+    # career began before the window: such players start from the veteran
+    # prior, which already reflects their career stage, so growth terms skip them.
+    ps_career_year: np.ndarray | None = None
+    x: np.ndarray | None = None             # (n_obs,) weekly opportunity points; NaN where unknown
 
     @property
     def n_obs(self) -> int:
@@ -131,6 +137,7 @@ def build_model_data(
     season_range_covariates: pl.DataFrame | None = None,
     unplayed_rookies: bool = True,
     min_plays: int = 0,
+    opportunity: pl.DataFrame | None = None,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -144,7 +151,12 @@ def build_model_data(
 
     Weeks with fewer than `min_plays` plays (an injury exit, a mop-up
     series) still count as games played but are left out of the observed
-    points, because they say little about the player's scoring rate."""
+    points, because they say little about the player's scoring rate.
+
+    `opportunity` (player_id, season, week, xfpts; features/opportunity.py)
+    adds each observed week's opportunity points. A week in a season the
+    table covers but with no row had no opportunities (0); weeks in seasons
+    it does not cover are NaN and carry no opportunity information."""
     weeks = tables.player_weeks.filter(
         (pl.col("position") == position) & (pl.col("season") >= first_season)
     )
@@ -213,6 +225,29 @@ def build_model_data(
     season_x = _per_season(ps, season_covariates, "season_covariates")
     season_vol_x = _per_season(ps, season_range_covariates, "season_range_covariates")
 
+    x = None
+    if opportunity is not None:
+        covered = opportunity["season"].unique().implode()
+        joined = (
+            obs.select("_row", "player_id", "season", "week")
+            .join(opportunity.select("player_id", "season", "week", "xfpts"), on=["player_id", "season", "week"], how="left")
+            .sort("_row")
+        )
+        x = joined.select(
+            pl.when(pl.col("season").is_in(covered)).then(pl.col("xfpts").fill_null(0.0)).otherwise(None)
+        ).to_series().cast(pl.Float64).fill_null(float("nan")).to_numpy()
+    static_all = tables.player_static
+    for c in ("draft_year", "draft_round", "first_season"):
+        if c not in static_all.columns:
+            static_all = static_all.with_columns(pl.lit(None, dtype=pl.Int64).alias(c))
+    entry = pl.coalesce("draft_year", "first_season").fill_null(pl.col("season"))
+    career = (
+        ps.select("ps_idx", "player_id", "season")
+        .join(static_all.select("player_id", "draft_year", "first_season"), on="player_id", how="left")
+        .sort("ps_idx")
+        .select(cy=(pl.col("season") - entry + 1).clip(lower_bound=1))
+    )
+
     y = obs["fpts"].to_numpy().astype(float)
     return ModelData(
         position=position,
@@ -235,4 +270,10 @@ def build_model_data(
         pre_window=player_feats["pre_window"].to_numpy(),
         prospect_x=prospect.to_numpy().astype(float),
         prospect_x_names=tuple(prospect.columns),
+        round1=players.join(static_all.select("player_id", "draft_round"), on="player_id", how="left").sort("player_idx")
+        .select((pl.col("draft_round") == 1).fill_null(False).cast(pl.Float64)).to_series().to_numpy(),
+        ps_career_year=np.where(
+            player_feats["pre_window"].to_numpy()[ps["player_idx"].to_numpy()] > 0, 0, career["cy"].to_numpy()
+        ).astype(np.int64),
+        x=x,
     )

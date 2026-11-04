@@ -167,7 +167,52 @@ def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic"):
     return beta1 * age_c + beta2 * age_c**2
 
 
-def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic") -> pm.Model:
+GROWTH_YEARS = (2, 3)  # career years that add a growth step to the rookie level, kept from then on
+GROWTH_PRIOR = {"sqrt": (0.3, 0.15), "log": (0.1, 0.05), "points": (1.0, 0.5)}  # (step, draft slope) sds
+EFFICIENCY_PRIOR = {"sqrt": 0.3, "log": 0.1}  # sd of the per-player efficiency scale
+
+
+def growth_design(career_year: np.ndarray, log_pick_z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(rows, len(GROWTH_YEARS)) indicators that a season is in career year
+    2 or later and 3 or later, and the same times the player's standardized
+    log pick. The growth term is ind @ xi + (ind * pick) @ zeta: year 2 adds
+    one step, year 3 a second, and both persist after, so draft capital can
+    change how much a player is expected to grow. (A further step at year 4
+    was tried; it was not identified apart from the random walk.)"""
+    cy = np.asarray(career_year)
+    ind = np.column_stack([cy >= g for g in GROWTH_YEARS]).astype(float)
+    return ind, ind * np.asarray(log_pick_z)[:, None]
+
+
+def has_opportunity(d: ModelData) -> bool:
+    return d.x is not None and bool(np.isfinite(d.x).any())
+
+
+def build_talent_model(
+    d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic",
+    round1: bool = False, growth: bool = False, opportunity: bool = False,
+    opportunity_years: int = 0,
+) -> pm.Model:
+    """With `round1`, first-round picks get their own step in the rookie
+    prior on top of log pick. With `growth`, career years 2 and 3 each add
+    a lasting growth step whose size may depend on draft capital
+    (`growth_design`). With `opportunity` (needs `d.x`),
+    talent is opportunity talent plus a per-player efficiency: weekly
+    opportunity points observe the first, weekly points the sum. With
+    `opportunity_years` > 0, opportunity points are used only in a player's
+    first that many career years (not for pre-window veterans), and only
+    players with such weeks get an efficiency term."""
+    use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
+    if use_opp:
+        seen = np.isfinite(d.x)
+        if opportunity_years > 0:
+            cy = np.zeros(d.n_ps) if d.ps_career_year is None else d.ps_career_year
+            cy_obs = cy[d.obs_ps]
+            seen &= (cy_obs >= 1) & (cy_obs <= opportunity_years)
+        seen = np.flatnonzero(seen)
+        has_eff = np.zeros(d.n_players, dtype=bool)
+        has_eff[d.ps_player[d.obs_ps[seen]]] = True
+        use_opp = len(seen) > 0
     coords = {
         "player": list(d.player_ids),
         "player_season": np.arange(d.n_ps),
@@ -175,8 +220,10 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
         "prospect_cov": list(d.prospect_x_names),
         "season_cov": list(d.season_x_names),
         "season_vol_cov": list(d.season_vol_x_names),
+        "growth_year": [str(g) for g in GROWTH_YEARS],
     }
     pr = PRIORS[scale_of(likelihood)]
+    latent_scale = scale_of(likelihood)
     with pm.Model(coords=coords) as model:
         # Rookie prior: draft capital + prospect covariates.
         alpha0 = pm.Normal("alpha0", *pr["alpha0"])
@@ -184,6 +231,14 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
         alpha_undrafted = pm.Normal("alpha_undrafted", 0.0, pr["alpha_undrafted"])
         sigma_rookie = pm.HalfNormal("sigma_rookie", pr["sigma_rookie"])
         rookie_mean = alpha0 + alpha_pick * d.log_pick_z + alpha_undrafted * d.undrafted
+        if round1 and d.round1 is not None and d.round1.any():
+            # The first-round flag minus its straight-line fit on log pick:
+            # the same model as the raw flag, but alpha_round1 no longer
+            # trades off against alpha_pick (raw, the pair mixed slowly).
+            X = np.column_stack([np.ones(d.n_players), d.log_pick_z, d.undrafted])
+            r1 = d.round1 - X @ np.linalg.lstsq(X, d.round1, rcond=None)[0]
+            alpha_round1 = pm.Normal("alpha_round1", 0.0, pr["alpha_pick"])
+            rookie_mean = rookie_mean + alpha_round1 * r1
         if d.prospect_x.shape[1]:
             gamma = _shrunk_coefs("gamma", "prospect_cov", pr["covariate"])
             rookie_mean = rookie_mean + pt.dot(d.prospect_x, gamma)
@@ -233,6 +288,19 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
         if d.season_x.shape[1]:
             eta = _shrunk_coefs("eta", "season_cov", pr["covariate"])
             latent = latent + pt.dot(d.season_x, eta)
+        if growth and d.ps_career_year is not None:
+            ind, ind_pick = growth_design(d.ps_career_year, d.log_pick_z[d.ps_player])
+            sd_shift, sd_slope = GROWTH_PRIOR[latent_scale]
+            xi = pm.Normal("growth", 0.0, sd_shift, dims="growth_year")
+            zeta = pm.Normal("growth_pick", 0.0, sd_slope, dims="growth_year")
+            latent = latent + pt.dot(ind, xi) + pt.dot(ind_pick, zeta)
+        latent_opp = latent
+        if use_opp:
+            # Efficiency: how far a player's scoring runs above his
+            # opportunity, one value per career, shrunk toward zero.
+            sigma_eff = pm.HalfNormal("sigma_eff", EFFICIENCY_PRIOR[latent_scale])
+            eff_z = pm.Normal("eff_z", 0.0, 1.0, dims="player")
+            latent = latent + (sigma_eff * eff_z * has_eff)[d.ps_player]
         center = link(latent, likelihood)
 
         if is_hurdle(likelihood):
@@ -251,6 +319,18 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
             z = np.sqrt(d.y[pos])
             t = pm.StudentT.dist(nu=nu, mu=loc[d.obs_ps[pos]], sigma=sigma)
             pm.Potential("fpts", pt.sum(pt.logaddexp(pm.logp(t, z), pm.logp(t, -z))))
+            if use_opp:
+                # Weekly opportunity points on the sqrt scale, centered on
+                # the opportunity part of the same location (plus an offset,
+                # since points and opportunity points differ on average).
+                loc_opp = link(latent_opp, likelihood)
+                delta_x = pm.Normal("delta_x", 0.0, 0.5)
+                sigma_x = pm.HalfNormal("sigma_x", 1.0)
+                nu_x = pm.Deterministic("nu_x", 2.0 + pm.Gamma("nu_x_minus_2", 2.0, 0.1))
+                pm.Potential("xfpts", pt.sum(pm.logp(
+                    pm.StudentT.dist(nu=nu_x, mu=loc_opp[d.obs_ps[seen]] + delta_x, sigma=sigma_x),
+                    np.sqrt(np.maximum(d.x[seen], 0.0)),
+                )))
         else:
             talent = pm.Deterministic("talent", center, dims="player_season")
             sigma = pm.HalfNormal("sigma", 10.0)

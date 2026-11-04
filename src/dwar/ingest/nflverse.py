@@ -47,11 +47,15 @@ DRAFT_PICK_COLUMNS = (
 # load_combine carries draft results, which are unknown between the combine
 # and the draft. Draft capital comes from draft_picks instead.
 COMBINE_DROP = ("draft_team", "draft_round", "draft_ovr")
-# Play-by-play is large (about 370 columns); keep what the situation factors use.
+# Play-by-play is large (about 370 columns); keep what the situation factors
+# and opportunity points (features/opportunity.py) use.
 PBP_COLUMNS = (
     "game_id", "season", "week", "season_type", "game_date", "posteam", "defteam",
     "play_type", "qtr", "down", "score_differential", "pass", "rush", "qb_dropback",
     "qb_epa", "passer_player_id", "receiver_player_id", "rusher_player_id", "pass_oe", "xpass",
+    "ydstogo", "yardline_100", "air_yards", "pass_attempt", "rush_attempt", "sack", "qb_scramble",
+    "qb_kneel", "qb_spike", "two_point_attempt", "yards_gained", "complete_pass", "pass_touchdown",
+    "rush_touchdown", "fumble_lost", "fumbled_1_player_id", "interception",
 )
 
 INJURY_COLUMNS = (

@@ -47,7 +47,12 @@ UNJITTERED = ("beta1", "beta2", "age_slope_pre", "age_slope_post")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    model = build_talent_model(d, cfg.likelihood_for(d.position), cfg.age_curve.get(d.position, "quadratic"))
+    p = d.position
+    model = build_talent_model(
+        d, cfg.likelihood_for(p), cfg.age_curve.get(p, "quadratic"),
+        round1=p in cfg.rookie_round1, growth=p in cfg.growth,
+        opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
+    )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler
@@ -150,26 +155,30 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
 
 def position_data(
     tables: PlayerTables, position: str, cfg: ModelConfig, cov: dict[str, Covariates] | None = None,
+    opportunity: pl.DataFrame | None = None,
 ) -> ModelData:
-    """One position's model data, with its situation factors if any."""
+    """One position's model data, with its situation factors if any, and its
+    weekly opportunity points if the position uses them."""
     c = (cov or {}).get(position)
+    extra = {"opportunity": opportunity} if opportunity is not None and position in cfg.opportunity else {}
     return build_model_data(
         tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0),
         season_covariates=c.level if c is not None and c.level.width > 2 else None,
         season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
+        **extra,
     )
 
 
 def fit_positions(
     tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None,
-    cov: dict[str, Covariates] | None = None,
+    cov: dict[str, Covariates] | None = None, opportunity: pl.DataFrame | None = None,
 ) -> dict[str, FitResult]:
     """Fit every configured position. All positions are attempted so each
     writes its diagnostics; if any fails, raises FitFailed for the first
     failure after the rest have run (the run is failed as a whole)."""
     results, failures = {}, []
     for position in cfg.positions:
-        d = position_data(tables, position, cfg, cov)
+        d = position_data(tables, position, cfg, cov, opportunity)
         try:
             results[position] = fit(d, cfg, out_dir, meta)
         except FitFailed as e:

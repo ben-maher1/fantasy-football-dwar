@@ -17,6 +17,7 @@ from dwar.config import REPO_ROOT, load_format, load_model_config, load_scoring,
 from dwar.features.asof import RawTables, asof_snapshot
 from dwar.features.injuries import InjuryRaw, injury_weeks
 from dwar.features.player_tables import build_player_tables
+from dwar.features.opportunity import opportunity_table
 from dwar.features.situation import SituationRaw, model_covariates, prepare
 from dwar.model.diagnostics import FitFailed
 from dwar.model.fit import fit_positions
@@ -54,7 +55,8 @@ def run(
 
     diagnostics = {**meta, "passed": False, "fits": {}}
     try:
-        fits = fit_positions(tables, model_cfg, out / "fits", meta, cov)
+        opp = opportunity_table(tables, load_scoring(fmt.scoring)) if model_cfg.opportunity else None
+        fits = fit_positions(tables, model_cfg, out / "fits", meta, cov, opp)
     except FitFailed:
         for p in model_cfg.positions:
             path = out / "fits" / f"{p.lower()}_diagnostics.json"

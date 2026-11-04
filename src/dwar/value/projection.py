@@ -16,7 +16,7 @@ import numpy as np
 from xarray import DataTree
 
 from dwar.model.data import AGE_CENTER, ModelData
-from dwar.model.talent import LIKELIHOOD_PARAMS, age_curve_effect, link, scale_of, talent_from_center
+from dwar.model.talent import LIKELIHOOD_PARAMS, age_curve_effect, growth_design, link, scale_of, talent_from_center
 
 
 def inverse_softplus(y: np.ndarray) -> np.ndarray:
@@ -39,6 +39,18 @@ class PositionDraws:
     eta: np.ndarray | None = None    # (draws, k) level-factor effects
     kappa: np.ndarray | None = None  # (draws, j) range-factor effects on log step size
     age_curve: str = "quadratic"
+    growth: np.ndarray | None = None       # (draws, len(GROWTH_YEARS)) career-year shifts
+    growth_pick: np.ndarray | None = None  # (draws, len(GROWTH_YEARS)) their draft-capital slopes
+    career_year: np.ndarray | None = None  # (player_seasons,) career year of each fitted season, 0 for veterans
+    ps_pick_z: np.ndarray | None = None    # (player_seasons,) the player's standardized log pick
+
+    def growth_effect(self, ps_idx: np.ndarray, career_year: np.ndarray) -> np.ndarray:
+        """(draws, players) growth term at `career_year` for the players of
+        `ps_idx`; zeros when the fit has no growth terms."""
+        if self.growth is None or self.ps_pick_z is None:
+            return np.zeros((self.tau.shape[0], len(ps_idx)))
+        ind, ind_pick = growth_design(career_year, self.ps_pick_z[ps_idx])
+        return self.growth @ ind.T + self.growth_pick @ ind_pick.T
 
     @classmethod
     def from_posterior(
@@ -70,6 +82,10 @@ class PositionDraws:
             eta=maybe("eta"),
             kappa=maybe("kappa"),
             age_curve="hinge" if hinge else "quadratic",
+            growth=maybe("growth"),
+            growth_pick=maybe("growth_pick"),
+            career_year=getattr(d, "ps_career_year", None),
+            ps_pick_z=None if getattr(d, "ps_career_year", None) is None else d.log_pick_z[d.ps_player],
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
@@ -98,8 +114,14 @@ def project_latent(
     latent talent (the projection never looks backward). `shift` and `vol`
     are (draws, players, seasons): `shift[..., j]` is season j's level-factor
     effect minus the latest fitted season's (added to that season only,
-    never carried into the walk), and `vol[..., j]` scales season j's step."""
+    never carried into the walk), and `vol[..., j]` scales season j's step.
+    Career-year growth works the same way as `shift`: season j adds its
+    growth term minus the latest fitted season's."""
     latent = draws.latent[:, ps_idx]
+    grows = draws.growth is not None and draws.career_year is not None
+    if grows:
+        cy_last = draws.career_year[ps_idx]
+        g_last = draws.growth_effect(ps_idx, cy_last)
     out = np.empty((latent.shape[0], len(ps_idx), len(seasons)))
     prev = last_season.astype(float)
     for j, season in enumerate(seasons):
@@ -112,6 +134,9 @@ def project_latent(
         latent = latent + draws.age_effect(age_next) - draws.age_effect(age_prev) + step
         prev = np.maximum(prev, season)
         out[:, :, j] = latent if shift is None else latent + shift[:, :, j]
+        if grows:
+            cy = np.where(cy_last > 0, cy_last + np.maximum(season - last_season, 0), 0)  # 0: veterans, no growth
+            out[:, :, j] += draws.growth_effect(ps_idx, cy) - g_last
     return out
 
 

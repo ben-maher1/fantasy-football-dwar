@@ -13,7 +13,7 @@ import polars as pl
 from dwar.features.player_tables import PlayerTables
 from dwar.model.data import ModelData, build_model_data
 from dwar.config import load_model_config
-from dwar.model.talent import LIKELIHOOD_PARAMS, link, scale_of, simulate_weeks, talent_from_center
+from dwar.model.talent import LIKELIHOOD_PARAMS, growth_design, link, scale_of, simulate_weeks, talent_from_center
 
 # Latent truth on each likelihood's latent scale (points, or sqrt(points)
 # for sqrt_hurdle, log(loc) for sqrt_hurdle_log, where 3.0 is about 9 ppg). The sqrt values sit
@@ -43,6 +43,14 @@ TRUE_GAMMA = {"points": {"forty_z": -0.8}, "sqrt": {"forty_z": -0.2}, "log": {"f
 # A season covariate's true coefficient, for the covariate-slot test.
 SEASON_EFFECT = {"points": 1.5, "sqrt": 0.4, "log": 0.13}
 FIRST_SEASON = 2006
+# Usage and early-career truth (sqrt scale): a first-round step in the rookie
+# prior, lasting growth steps in career years 2 and 3 (more for better
+# picks: a negative slope on log pick), per-player efficiency, and weekly opportunity
+# points observed around the opportunity part of the location.
+USAGE_TRUTH = {
+    "alpha_round1": 0.3, "growth": (0.25, 0.15), "growth_pick": (-0.1, -0.05),
+    "sigma_eff": 0.25, "delta_x": 0.1, "sigma_x": 0.4, "nu_x": 10.0,
+}
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,7 @@ class Simulated:
     likelihood: str
     talent: np.ndarray  # true talent (expected ppg) per player-season, aligned with data.ps_keys
     realized: dict      # sample statistics of the simulated draws (see below)
+    usage: bool = False
 
     @property
     def scale(self) -> str:
@@ -64,7 +73,8 @@ class Simulated:
     @property
     def truth(self) -> dict[str, float]:
         params = {k: v for k, v in LIKELIHOOD_TRUTH[self.likelihood].items() if k in LIKELIHOOD_PARAMS[self.likelihood]}
-        return LATENT_TRUTH[self.scale] | params | self.realized
+        usage = {k: v for k, v in USAGE_TRUTH.items() if isinstance(v, float)} if self.usage else {}
+        return LATENT_TRUTH[self.scale] | params | self.realized | usage
 
 
 def _tables(players: pl.DataFrame, seasons: pl.DataFrame, weeks: pl.DataFrame) -> PlayerTables:
@@ -83,11 +93,14 @@ def simulate(
     season_effect: float | None = None,
     likelihood: str | None = None,
     range_effect: float | None = None,
+    usage: bool = False,
 ) -> Simulated:
     """`season_effect`, if given, adds one season covariate with that true
     coefficient, to test the covariate slot. `range_effect`, if given, adds
     a 0/1 flag (a third of seasons) that multiplies that season's step by
-    exp(range_effect). `likelihood` defaults to the configured one."""
+    exp(range_effect). `likelihood` defaults to the configured one. With
+    `usage`, the truth adds USAGE_TRUTH (sqrt scale) and the data carry
+    weekly opportunity points (`Simulated.opportunity`)."""
     likelihood = likelihood or load_model_config().likelihood
     rng = np.random.default_rng(seed)
     player_rows, season_rows = [], []
@@ -102,9 +115,13 @@ def simulate(
         for _ in range(n_seasons):
             played.append(season)
             season += 2 if rng.random() < 0.1 else 1
+        pick = int(rng.integers(1, 257)) if drafted else None
         player_rows.append({
             "player_id": pid,
-            "draft_pick": int(rng.integers(1, 257)) if drafted else None,
+            "draft_pick": pick,
+            "draft_round": None if pick is None else (pick - 1) // 32 + 1,
+            "draft_year": None if vet or pick is None else start,
+            "position": "WR",
             "first_season": 2003 if vet else start,
             "forty": None if rng.random() < 0.2 else float(rng.normal(4.5, 0.1)),
             "ht_in": int(rng.integers(69, 77)),
@@ -112,7 +129,10 @@ def simulate(
         })
         for s in played:
             season_rows.append({"player_id": pid, "season": s, "age_sept1": rookie_age + (s - start)})
-    players = pl.DataFrame(player_rows, schema_overrides={"draft_pick": pl.Int64, "forty": pl.Float64})
+    players = pl.DataFrame(
+        player_rows,
+        schema_overrides={"draft_pick": pl.Int64, "draft_round": pl.Int64, "draft_year": pl.Int64, "forty": pl.Float64},
+    )
     seasons = pl.DataFrame(season_rows)
     if season_effect is not None:
         seasons = seasons.with_columns(boost=pl.Series(rng.normal(0, 1, seasons.height)))
@@ -125,12 +145,17 @@ def simulate(
     vols = seasons.select("player_id", "season", "moved") if range_effect is not None else None
     d0 = build_model_data(
         _tables(players, seasons, skeleton), first_season=FIRST_SEASON, season_covariates=covs,
-        season_range_covariates=vols,
+        season_range_covariates=vols, unplayed_rookies=False,
     )
 
     t = LATENT_TRUTH[scale_of(likelihood)]
     gamma = np.array([TRUE_GAMMA[scale_of(likelihood)].get(n, 0.0) for n in d0.prospect_x_names])
     rookie_mean = t["alpha0"] + t["alpha_pick"] * d0.log_pick_z + t["alpha_undrafted"] * d0.undrafted + d0.prospect_x @ gamma
+    u = USAGE_TRUTH
+    if usage:
+        X = np.column_stack([np.ones(d0.n_players), d0.log_pick_z, d0.undrafted])
+        r1 = d0.round1 - X @ np.linalg.lstsq(X, d0.round1, rcond=None)[0]  # as the model codes it
+        rookie_mean = rookie_mean + u["alpha_round1"] * r1
     prior_mean = np.where(d0.pre_window > 0, t["mu_vet"], rookie_mean)
     prior_sd = np.where(d0.pre_window > 0, t["sigma_vet"], t["sigma_rookie"])
     age_effect = t["beta1"] * d0.ps_age_c + t["beta2"] * d0.ps_age_c**2
@@ -146,6 +171,12 @@ def simulate(
     latent = level + age_effect
     if season_effect is not None:
         latent = latent + season_effect * d0.season_x[:, 0]
+    latent_opp = latent
+    if usage:
+        ind, ind_pick = growth_design(d0.ps_career_year, d0.log_pick_z[d0.ps_player])
+        latent = latent + ind @ np.array(u["growth"]) + ind_pick @ np.array(u["growth_pick"])
+        latent_opp = latent
+        latent = latent + (u["sigma_eff"] * rng.normal(size=d0.n_players))[d0.ps_player]
     center = link(latent, likelihood, lib=np)
     talent = talent_from_center(likelihood, center, LIKELIHOOD_TRUTH[likelihood])
 
@@ -154,10 +185,19 @@ def simulate(
     weeks = pl.DataFrame({
         "player_id": np.repeat(keys["player_id"].to_numpy(), n),
         "season": np.repeat(keys["season"].to_numpy(), n),
+        "week": np.tile(np.arange(1, n + 1), keys.height).astype(np.int32),
         "fpts": simulate_weeks(likelihood, np.repeat(center, n), LIKELIHOOD_TRUTH[likelihood], rng),
     })
+    opportunity = None
+    if usage:
+        loc_opp = np.repeat(link(latent_opp, likelihood, lib=np), n) + u["delta_x"]
+        sqrt_x = np.abs(loc_opp + u["sigma_x"] * rng.standard_t(u["nu_x"], loc_opp.shape))
+        opportunity = weeks.select("player_id", pl.col("season").cast(pl.Int32), "week", xfpts=pl.Series(sqrt_x**2))
     tables = _tables(players, seasons, weeks)
-    data = build_model_data(tables, first_season=FIRST_SEASON, season_covariates=covs, season_range_covariates=vols)
+    data = build_model_data(
+        tables, first_season=FIRST_SEASON, season_covariates=covs, season_range_covariates=vols, opportunity=opportunity,
+        unplayed_rookies=False,
+    )
     # With ~50 veterans, the sample mean and sd of their starting levels can sit
     # well away from mu_vet / sigma_vet by chance; the data can only reveal the
     # realized values, so the recovery test checks against these.
@@ -167,4 +207,4 @@ def simulate(
         {"mu_vet": float(vet_start.mean()), "sigma_vet": float(vet_start.std(ddof=1))}
         if len(vet_start) > 1 else {}
     )
-    return Simulated(tables=tables, data=data, likelihood=likelihood, talent=talent, realized=realized)
+    return Simulated(tables=tables, data=data, likelihood=likelihood, talent=talent, realized=realized, usage=usage)

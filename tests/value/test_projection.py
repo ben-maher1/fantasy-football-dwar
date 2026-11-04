@@ -110,3 +110,21 @@ def test_future_situation_fades_and_uses_typical_moves():
     np.testing.assert_allclose(shift[0, 0], [0.0, 2.0, 2.0 * rho[0]])
     # Typical step scale over the later seasons: mean of exp(0) and exp(log 2).
     np.testing.assert_allclose(vol[0, 0], [1.0, 2.0, 1.5])
+
+
+def test_growth_steps_follow_career_year_and_draft_capital():
+    """A rookie (career year 1) gains the year-2 step next season and the
+    year-3 step the season after, then keeps both; a better pick (lower
+    standardized log pick) grows more. A veteran (career year 0: began
+    before the fitting window) gains nothing."""
+    d = draws(3, [8.0, 8.0, 8.0])
+    d = PositionDraws(**{
+        **d.__dict__,
+        "growth": np.tile([1.0, 0.5], (3, 1)), "growth_pick": np.tile([-0.5, 0.0], (3, 1)),
+        "career_year": np.array([1, 1, 0]), "ps_pick_z": np.array([-1.0, 1.0, 0.0]),
+    })
+    out = project_talent(d, np.array([0, 1, 2]), np.array([2025, 2025, 2025]), np.full(3, 26.0),
+                         np.arange(2025, 2029), np.random.default_rng(0))
+    np.testing.assert_allclose(out[0, 0], [8.0, 9.5, 10.0, 10.0])  # year-2 step 1 + 0.5 for a high pick
+    np.testing.assert_allclose(out[0, 1], [8.0, 8.5, 9.0, 9.0])    # a late pick: 1 - 0.5
+    np.testing.assert_allclose(out[0, 2], 8.0)

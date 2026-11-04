@@ -17,7 +17,7 @@ def test_failed_fit_writes_only_failed_diagnostics(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "prepare", lambda sraw: None)
     monkeypatch.setattr(pipeline, "model_covariates", lambda *a: {})
 
-    def failing(tables, cfg, out_dir, meta, cov=None):
+    def failing(tables, cfg, out_dir, meta, cov=None, opportunity=None):
         out_dir.mkdir(parents=True)
         diag = Diagnostics(False, ["2 divergences"], 2, 1.0, "", 1e3, "", 1e3, "")
         (out_dir / "rb_diagnostics.json").write_text(json.dumps(diag.to_dict()))
