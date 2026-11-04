@@ -20,3 +20,9 @@ diagnostics:
   max_rhat: 1.01
   min_ess_bulk: 400
   min_ess_tail: 400
+# Early-career terms (usage and early-career prior plan). Kept where they won
+# on dev seasons; RB was a hair worse on both halves of dev, so it is left out.
+# Opportunity points (`opportunity`, `opportunity_years`) were tested and
+# made forecasts worse, for all seasons and for career years 1-2 only.
+rookie_round1: [QB, WR, TE]  # first-round step in the rookie prior, beyond log pick
+growth: [QB, WR, TE]         # lasting steps at career years 2 and 3, scaled by draft pick
