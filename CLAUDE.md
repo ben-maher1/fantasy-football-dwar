@@ -79,7 +79,7 @@ From talent to DWAR:
    superflex allocated by optimal lineups).
 2. Points above replacement (PAR) per week → wins, using the standard deviation of
    weekly team scores in the configured league format (points-per-win conversion).
-3. Project forward 5 seasons via posterior predictive draws (age curve +
+3. Project forward the rest of this season plus 3 more (ben, 2026-11-05; was 5) via posterior predictive draws (age curve +
    random-walk talent + availability + survival). Apply a discount factor per future
    season (configurable, default 0.85) to reflect contention timelines and
    uncertainty.
