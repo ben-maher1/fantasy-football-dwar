@@ -18,6 +18,7 @@ import json
 import logging
 import sys
 import time
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -51,9 +52,16 @@ PERIODS = {
 OUTCOMES_AS_OF = date(2026, 3, 1)  # after the 2025 season
 LAST_SEASON = 2025
 N_SETTINGS = 100                   # posterior draws of the settings used by the filter
+# Particles per draw. 40 was too few: with no rejuvenation the particles of a
+# season's level collapse onto a few values and the filter under-reacts to
+# new games (early_m400). Results before 2026-11-05 evening used 40 and are
+# archived in experiments/career/m40.
+PARTICLES = 400
 
 VARIANTS: dict[str, dict] = {
-    "base": {},                                  # the current WR model (growth and first-round step on)
+    # Variants start from config/model.yaml, which now has the game-by-game
+    # terms on, so earlier variants turn off what they lacked.
+    "base": {"game_steps": (), "qb_drift": ()},  # growth and first-round step on
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
@@ -72,7 +80,7 @@ VARIANTS: dict[str, dict] = {
     # form5's 2023 holdout fit diverged: the form term's rho^-j scaling
     # overflowed at small rho. form6 = form with the stable decay-matrix
     # version (same model) at the usual draws.
-    "form6": {"game_steps": (POSITION,), "game_mode": "form"},
+    "form6": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": ()},
     # + offseason drift with the QB rating (ben, 2026-11-05: WRs with a
     # bottom-quarter QB were over-forecast ~0.9 PPG the next season).
     "qb": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,)},
@@ -84,7 +92,8 @@ VARIANTS: dict[str, dict] = {
     # The 2026 WR fit (2013-2026) had a chain in a second mode where fast
     # "form" replaced weekly noise; qb4 = qb3 with form's spread a fraction
     # of the weekly noise's (model/talent.py form_ratio).
-    "qb4": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500}},
+    "qb4": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+            "reuse_fit": {"dev": "qbfade"}},
     # ben, 2026-11-05 (Jalen Coker): qb4 carries today's QB into every
     # projected season. A WR's QB rating keeps only ~0.26 of its distance
     # from average a season later (QBs and teams change): qbfade fades it
@@ -95,6 +104,19 @@ VARIANTS: dict[str, dict] = {
     # and is kept (config/value.yaml qb_fade): it matches how little a QB rating carries.
     # ... and a cubic WR age curve: the quadratic peaks at ~24. Tied too (dev
     # MAE -0.003, log -0.002); peak still ~25, gentler after 30: not kept.
+    # ben, 2026-11-05: young WRs running hot beat their forecasts (rest of
+    # season and next) by 1-2 PPG. tau_early lets talent move more between
+    # seasons early in a career; exits leaves injury-exit games out of the fit.
+    "early": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "tau_early": (POSITION,)},
+    "exits": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "injury_exits": (POSITION,)},
+    # Results (dev, vs qbfade): early tied (lam_tau -0.13 +- 0.26: young WRs'
+    # talent does not move more between seasons); exits worse at every
+    # horizon (discounted log -0.013). Neither kept.
+    # early's step-through with 10x the particles: does the filter itself under-react?
+    "early_m400": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                   "fade_qb": True, "tau_early": (POSITION,), "particles": 400, "reuse_fit": {"dev": "early"}},
     "cubic": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "age_curve": {POSITION: "cubic"}},
 }
@@ -115,6 +137,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     v = dict(VARIANTS[name])
     fade = v.pop("fade_qb", False)
     reuse = v.pop("reuse_fit", {}).get(period)
+    particles = v.pop("particles", PARTICLES)
     if "sampler" in v:
         v["sampler"] = base.sampler.model_copy(update=v["sampler"])
     cfg = base.model_copy(update={"first_season": FIRST_SEASON, "positions": (POSITION,)} | v)
@@ -139,14 +162,22 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     total = posterior["posterior"].sizes["chain"] * posterior["posterior"].sizes["draw"]
     draws = np.random.default_rng(seed).choice(total, N_SETTINGS, replace=False)
     settings = Settings.from_posterior(d, posterior, cfg.likelihood_for(POSITION), np.sort(draws), fade_qb=fade)
+    exits = POSITION in cfg.injury_exits
+    if exits:
+        # Injury exits are left out of the fit; forecasts add them back at
+        # the rate (and with the points) seen in the fit's own seasons.
+        w = fit_tables.player_weeks.filter((pl.col("position") == POSITION) & (pl.col("season") >= cfg.first_season_by_position.get(POSITION, cfg.first_season)))
+        hurt = w.filter(pl.col("injury_exit"))
+        settings = replace(settings, exit_rate=hurt.height / w.height, exit_points=hurt["fpts"].to_numpy())
+        log.info("injury exits: %.1f%% of games, %.2f points on average", 100 * settings.exit_rate, hurt["fpts"].mean())
     full = build_model_data(
         _tables(OUTCOMES_AS_OF), POSITION, FIRST_SEASON, min_plays=cfg.min_plays.get(POSITION, 0),
-        unplayed_rookies=False, reference_players=d.player_ids,
+        unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
     )
     if full.prospect_x_names != settings.prospect_names:
         raise ValueError(f"prospect columns differ: {full.prospect_x_names} vs {settings.prospect_names}")
     start = time.perf_counter()
-    rows = step_through(settings, full, test_seasons, LAST_SEASON, seed=cfg.seed)
+    rows = step_through(settings, full, test_seasons, LAST_SEASON, seed=cfg.seed, m=particles)
     log.info("%s step-through: %d rows in %.0fs", name, rows.height, time.perf_counter() - start)
     path = out / "forecasts.parquet"
     rows.write_parquet(path)

@@ -40,6 +40,7 @@ from dwar.model.talent import (
     GROWTH_YEARS,
     link,
     nonzero_prob,
+    season_early,
     simulate_weeks,
 )
 from dwar.validate.forecast import kde_log_density, pit
@@ -82,6 +83,15 @@ class Settings:
     qb_drift_low: np.ndarray | None = None
     fade: QBFade | None = None              # later seasons' QB fades toward average; None = carried forward
     beta3: np.ndarray | None = None         # cubic age term; None = quadratic
+    lam_tau: np.ndarray | None = None       # early-career boost to the offseason step (tau_early); None = off
+    exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
+    exit_points: np.ndarray | None = None   # points in past injury-exit games, drawn for simulated exits
+
+    def step_sd(self, draw: np.ndarray, career_games: float) -> np.ndarray:
+        """Offseason step SD into a season starting after `career_games` games."""
+        if self.lam_tau is None:
+            return self.tau[draw]
+        return self.tau[draw] * np.exp(self.lam_tau[draw] * season_early(career_games))
 
     def drift(self, q: float, draw: np.ndarray, offseason: int = 1) -> np.ndarray | float:
         """Mean offseason move given the QB rating `q` at the end of the season
@@ -139,6 +149,7 @@ class Settings:
             fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
             if fade_qb and d.ps_qb_end is not None else None,
             beta3=take("beta3") if "beta3" in post else None,
+            lam_tau=take("lam_tau") if "lam_tau" in post else None,
         )
 
 
@@ -181,6 +192,7 @@ class Player:
     games: list[np.ndarray]          # weekly points per season, in week order
     career_games: list[np.ndarray]   # career games before each of those weeks
     qb: list[np.ndarray]             # each week's QB rating (0 when unknown)
+    exits: list[np.ndarray] | None = None  # each week: an injury exit (scored, but not used to update)
 
     def qb_before(self, j: int, k: int) -> float:
         """The QB rating in the last game before game k of season j (0 before any)."""
@@ -205,6 +217,7 @@ def players(d: ModelData) -> list[Player]:
             games=[d.y[order][obs_ps == i] for i in ps],
             career_games=[d.obs_career_games[order][obs_ps == i] for i in ps],
             qb=[(d.obs_qb[order] if d.obs_qb is not None else np.zeros(d.n_obs))[obs_ps == i] for i in ps],
+            exits=None if d.obs_exit is None else [d.obs_exit[order][obs_ps == i] for i in ps],
         ))
     return out
 
@@ -230,10 +243,11 @@ class Filter:
         self.dev = np.zeros(len(self.draw))  # in-season form ("form" mode); resets each season
         self.logw = np.zeros(len(self.draw))
 
-    def offseason(self, gap: float, q: float = 0.0) -> None:
-        """Into a new season; `q` is the QB rating at the end of the season before."""
+    def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0) -> None:
+        """Into a new season; `q` is the QB rating at the end of the season
+        before, `career_games` the games played before the new one."""
         self.x = (self.x + self.s.drift(q, self.draw)
-                  + self.s.tau[self.draw] * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
+                  + self.s.step_sd(self.draw, career_games) * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
         self.dev = np.zeros(len(self.x))
 
     def before_game(self, first_in_window: bool, career_games: float) -> None:
@@ -303,7 +317,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
         if h > 0 and n_games:
             # One drift per step between seasons played, as in the fit.
             # The QB behind this drift is season (j + h - 1)'s: h - 1 seasons on.
-            x = x + s.drift(q, draw, h) + s.tau[draw] * np.sqrt(season - prev_season) * rng.standard_normal(r)
+            x = x + s.drift(q, draw, h) + s.step_sd(draw, cg) * np.sqrt(season - prev_season) * rng.standard_normal(r)
             dev = np.zeros(r)
         if not n_games:
             out.append(None)
@@ -318,7 +332,11 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
             lat[:, k] = x + dev + shift
             cg += 1
         center = link(lat, s.likelihood, lib=np)
-        out.append(simulate_weeks(s.likelihood, center, params, rng))
+        sim = simulate_weeks(s.likelihood, center, params, rng)
+        if s.exit_rate > 0 and s.exit_points is not None:
+            hurt = rng.random(sim.shape) < s.exit_rate
+            sim = np.where(hurt, rng.choice(s.exit_points, sim.shape), sim)
+        out.append(sim)
     return out
 
 
@@ -337,9 +355,10 @@ def step_through(
         rng = np.random.default_rng((seed, zlib.crc32(p.player_id.encode())))  # per player: runs don't interact
         f = Filter(s, p, m, rng)
         by_season = dict(zip(p.seasons, range(len(p.seasons))))
+        started = False  # the first game used takes no step (the fit's convention)
         for j, season in enumerate(p.seasons):
             if j > 0:
-                f.offseason(p.gaps[j], p.qb_before(j, 0))
+                f.offseason(p.gaps[j], p.qb_before(j, 0), float(p.career_games[j][0]) if len(p.career_games[j]) else 0.0)
             g = p.games[j]
             for k in range(len(g) + 1):
                 if season in test_seasons and k < len(g):
@@ -368,7 +387,8 @@ def step_through(
                         rows.append(base | {"horizon": -1, "games": int(sum(later)), "actual": a_tot,
                                             "pred_mean": float(np.mean(tot)), "log_score": kde_log_density(tot, a_tot),
                                             "pit": pit(tot, a_tot)})
-                if k < len(g):
-                    f.before_game(j == 0 and k == 0, float(p.career_games[j][k]))
+                if k < len(g) and not (p.exits is not None and p.exits[j][k]):
+                    f.before_game(not started, float(p.career_games[j][k]))
                     f.update(j, float(g[k]))
+                    started = True
     return pl.DataFrame(rows)

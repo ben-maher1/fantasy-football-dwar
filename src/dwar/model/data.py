@@ -56,6 +56,9 @@ class ModelData:
     obs_career_games: np.ndarray | None = None  # (n_obs,) games the player had played before this one, whole career
     obs_qb: np.ndarray | None = None        # (n_obs,) rating of that game's QB (features/qb_rating.py); 0 when unknown
     ps_qb_end: np.ndarray | None = None     # (n_ps,) the QB rating in the player's last game of that season
+    ps_career_games: np.ndarray | None = None  # (n_ps,) career games before that season's first game
+    ps_career_games_end: np.ndarray | None = None  # (n_ps,) career games after that season's last game
+    obs_exit: np.ndarray | None = None      # (n_obs,) injury-exit game (features/exits.py), kept only with injury_exits="flag"
 
     @property
     def n_obs(self) -> int:
@@ -153,6 +156,7 @@ def build_model_data(
     min_plays: int = 0,
     opportunity: pl.DataFrame | None = None,
     reference_players: tuple[str, ...] | None = None,
+    injury_exits: str = "keep",
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -172,6 +176,10 @@ def build_model_data(
     adds each observed week's opportunity points. A week in a season the
     table covers but with no row had no opportunities (0); weeks in seasons
     it does not cover are NaN and carry no opportunity information.
+
+    `injury_exits` "drop" leaves injury-exit games (features/exits.py:
+    the player left early hurt) out of the observed points like short
+    weeks; "flag" keeps them and marks them in `obs_exit`.
 
     `reference_players` (a fit's `player_ids`) sets the draft-pick and
     combine standardization, so data built later for new players matches
@@ -214,6 +222,10 @@ def build_model_data(
         if "plays" not in weeks.columns or weeks["plays"].null_count() == weeks.height:
             raise ValueError("min_plays needs weekly play counts, and these tables have none")
         observed = weeks.filter(pl.col("plays") >= min_plays)
+    if injury_exits == "drop":
+        if "injury_exit" not in weeks.columns:
+            raise ValueError("injury_exits='drop' needs player_weeks.injury_exit")
+        observed = observed.filter(~pl.col("injury_exit").fill_null(False))
     obs = (
         observed.with_row_index("_row")
         .join(ps.select("player_id", "season", "ps_idx"), on=["player_id", "season"], how="inner")
@@ -293,6 +305,11 @@ def build_model_data(
             .sort("ps_idx", "week").group_by("ps_idx").agg(pl.col("q").last()))
     ps_qb_end = np.zeros(ps.height)
     ps_qb_end[ends["ps_idx"].to_numpy()] = ends["q"].to_numpy()
+    cg = (prior_games.group_by("player_id", "season")
+          .agg(cg0=pl.col("career_games").min(), cg1=pl.col("career_games").max() + 1))
+    cg = ps.select("player_id", "season", "ps_idx").join(cg, on=["player_id", "season"], how="left").sort("ps_idx")
+    cg = cg.with_columns(pl.col("cg1").fill_null(strategy="forward").over("player_id").fill_null(0))
+    cg = cg.with_columns(pl.col("cg0").fill_null(pl.col("cg1").shift(1).over("player_id")).fill_null(0))
     return ModelData(
         position=position,
         y=y,
@@ -324,4 +341,8 @@ def build_model_data(
         obs_career_games=obs["career_games"].fill_null(0).to_numpy().astype(float),
         obs_qb=obs_qb,
         ps_qb_end=ps_qb_end,
+        ps_career_games=cg["cg0"].to_numpy().astype(float),
+        ps_career_games_end=cg["cg1"].to_numpy().astype(float),
+        obs_exit=obs["injury_exit"].fill_null(False).to_numpy() if injury_exits == "flag" and "injury_exit" in obs.columns
+        else None,
     )

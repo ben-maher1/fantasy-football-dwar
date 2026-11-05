@@ -116,6 +116,7 @@ def asof_snapshot(
             "player_id", "season", "week", "game_id", "team", "gameday",
             pl.col("opponent").alias("opponent_team"),
             pl.col("offense_snaps").fill_null(0),
+            *([pl.col("offense_pct")] if "offense_pct" in raw.snap_counts.columns else []),
         )
         .with_columns(knowable_on=pl.col("gameday") + timedelta(days=1)),
         as_of,

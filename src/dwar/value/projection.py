@@ -25,8 +25,11 @@ from dwar.model.talent import (
     growth_design,
     link,
     scale_of,
+    season_early,
     talent_from_center,
 )
+
+GAMES_PER_SEASON = 15.0  # games assumed per projected season for the early-career step (tau_early)
 
 
 def inverse_softplus(y: np.ndarray) -> np.ndarray:
@@ -60,6 +63,17 @@ class PositionDraws:
     ps_qb_end: np.ndarray | None = None    # (player_seasons,) QB rating in the season's last game
     fade: QBFade | None = None             # later seasons' QB fades toward average; None = carried forward
     beta3: np.ndarray | None = None        # (draws,) cubic age term; None = quadratic or hinge
+    lam_tau: np.ndarray | None = None      # (draws,) early-career boost to the offseason step; None = off
+    ps_career_games_end: np.ndarray | None = None  # (player_seasons,) career games after each season
+
+    def step_sd(self, ps_idx: np.ndarray, seasons_on: np.ndarray) -> np.ndarray:
+        """(draws, players) offseason step SD into the season `seasons_on`
+        after each player's latest fitted one (later seasons assume
+        GAMES_PER_SEASON games each in between)."""
+        if self.lam_tau is None or self.ps_career_games_end is None:
+            return np.broadcast_to(self.tau[:, None], (len(self.tau), len(ps_idx)))
+        cg = self.ps_career_games_end[ps_idx] + GAMES_PER_SEASON * np.maximum(np.asarray(seasons_on) - 1, 0)
+        return self.tau[:, None] * np.exp(self.lam_tau[:, None] * season_early(cg)[None, :])
 
     def drift(self, ps_idx: np.ndarray, offseason: np.ndarray | int = 1) -> np.ndarray | float:
         """(draws, players) mean offseason move from the QB the player had
@@ -139,6 +153,8 @@ class PositionDraws:
             fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
             if fade_qb and getattr(d, "ps_qb_end", None) is not None else None,
             beta3=maybe("beta3"),
+            lam_tau=maybe("lam_tau"),
+            ps_career_games_end=getattr(d, "ps_career_games_end", None),
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
@@ -182,7 +198,7 @@ def project_latent(
         ahead = np.maximum(season - prev, 0.0)  # seasons since the last projected one
         age_prev = last_age + (prev - last_season)
         age_next = last_age + np.maximum(season - last_season, 0)
-        step = draws.tau[:, None] * np.sqrt(ahead) * rng.standard_normal(latent.shape)
+        step = draws.step_sd(ps_idx, season - last_season) * np.sqrt(ahead) * rng.standard_normal(latent.shape)
         if vol is not None:
             step = step * vol[:, :, j]
         step = step + np.where(ahead[None] > 0, draws.drift(ps_idx, season - last_season), 0.0)  # one drift per offseason, as in the fit

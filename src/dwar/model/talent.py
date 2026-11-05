@@ -176,6 +176,13 @@ GROWTH_PRIOR = {"sqrt": (0.3, 0.15), "log": (0.1, 0.05), "points": (1.0, 0.5)}  
 EFFICIENCY_PRIOR = {"sqrt": 0.3, "log": 0.1}  # sd of the per-player efficiency scale
 GAME_STEP_PRIOR = {"sqrt": 0.1, "log": 0.03}  # sd of the per-game step scale
 EARLY_GAMES = 17.0  # career games over which the early-career boost to game steps fades (by 1/e)
+EARLY_SEASON_GAMES = 34.0  # the same for the offseason step (tau_early)
+
+
+def season_early(career_games):
+    """Early-career weight of an offseason step: 1 for a player with no
+    games yet, 1/e after EARLY_SEASON_GAMES."""
+    return np.exp(-np.asarray(career_games, dtype=float) / EARLY_SEASON_GAMES)
 
 
 def game_step_design(d: ModelData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -229,7 +236,7 @@ def build_talent_model(
     d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic",
     round1: bool = False, growth: bool = False, opportunity: bool = False,
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
-    qb_drift: bool = False, form_rho: float | None = None,
+    qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -260,7 +267,12 @@ def build_talent_model(
     with the rating of the QB in the player's last game of the season
     before: qb_drift * q + qb_drift_low * min(q - LOW_KNOT, 0), so a bad
     QB situation can keep pulling talent down beyond the points it already
-    cost (the extra slope below the knot lets the bad side differ)."""
+    cost (the extra slope below the knot lets the bad side differ).
+
+    With `tau_early` (needs `d.ps_career_games`), the offseason step's
+    scale is tau * exp(lam_tau * exp(-career games before the season /
+    EARLY_SEASON_GAMES)): young players' talent can move more between
+    seasons, so their latest season counts more."""
     use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
     if use_opp:
         seen = np.isfinite(d.x)
@@ -341,6 +353,9 @@ def build_talent_model(
             if d.season_vol_x.shape[1]:
                 kappa = pm.Normal("kappa", 0.0, KAPPA_SD, dims="season_vol_cov")
                 scale = scale * pt.exp(pt.dot(d.season_vol_x[later], kappa))
+            if tau_early and d.ps_career_games is not None:
+                lam_tau = pm.Normal("lam_tau", 0.0, 1.0)
+                scale = scale * pt.exp(lam_tau * season_early(d.ps_career_games[later]))
             move = scale * step_z
             if qb_drift and d.ps_qb_end is not None:
                 # Rows are sorted by player then season, so a later season's

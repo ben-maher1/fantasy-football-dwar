@@ -61,7 +61,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         round1=p in cfg.rookie_round1, growth=p in cfg.growth,
         opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
         game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
-        form_rho=cfg.form_rho,
+        form_rho=cfg.form_rho, tau_early=p in cfg.tau_early,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
@@ -211,6 +211,7 @@ def position_data(
         tables, position, cfg.first_season_by_position.get(position, cfg.first_season), min_plays=cfg.min_plays.get(position, 0),
         season_covariates=c.level if c is not None and c.level.width > 2 else None,
         season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
+        injury_exits="drop" if position in cfg.injury_exits else "keep",
         **extra,
     )
 

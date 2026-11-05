@@ -14,6 +14,7 @@ import polars as pl
 
 from dwar.config import ScoringConfig, data_dir
 from dwar.features.asof import PLAY_COLUMNS, AsOfSnapshot
+from dwar.features.exits import flag_injury_exits
 from dwar.features.qb_rating import team_qb_ratings
 from dwar.features.scoring import fantasy_points
 
@@ -81,6 +82,9 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
         )
     )
     weeks = pl.concat([scored, snap_only], how="vertical_relaxed")
+    weeks = weeks.join(snap.snaps.select("player_id", "game_id", *(c for c in ("offense_snaps", "offense_pct") if c in snap.snaps.columns)).unique(["player_id", "game_id"]),
+                       on=["player_id", "game_id"], how="left")
+    weeks = flag_injury_exits(weeks)
     positions = _season_positions(snap, weeks.select("player_id", "season"))
     qb = team_qb_ratings(snap.stats)
     if qb.height:
