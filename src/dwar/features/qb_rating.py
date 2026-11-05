@@ -9,6 +9,9 @@ used, so a rating never sees the game it rates or anything later.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+import numpy as np
 import polars as pl
 
 SHRINK_ATTEMPTS = 200.0
@@ -44,3 +47,31 @@ def team_qb_ratings(stats: pl.DataFrame) -> pl.DataFrame:
         .first()
         .select(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), "team", "qb_rating")
     )
+
+
+@dataclass(frozen=True)
+class QBFade:
+    """How a player's QB rating carries into later seasons: `keep[k-1]` is
+    the slope of the rating k seasons later on today's, and `mean` the
+    rating they fade toward (QBs and teams change, so it is far from 1)."""
+    mean: float
+    keep: tuple[float, ...]
+
+    def expected(self, q, offseason: int):
+        """Expected rating behind the drift at the `offseason`-th projected
+        offseason (1 = the next one, which uses the current rating as is)."""
+        keep = np.array((1.0, *self.keep))
+        w = keep[np.clip(np.asarray(offseason) - 1, 0, len(self.keep))]
+        return self.mean + w * (np.asarray(q) - self.mean)
+
+
+def qb_fade(player: np.ndarray, season: np.ndarray, q: np.ndarray, max_ahead: int = 3) -> QBFade:
+    """Fit QBFade from player-seasons' end-of-season ratings (point in time:
+    pass only fitted seasons). A slope needs 30 pairs, otherwise 0."""
+    df = pl.DataFrame({"p": player, "s": season, "q": q})
+    keep = []
+    for k in range(1, max_ahead + 1):
+        j = df.join(df.with_columns(s=pl.col("s") - k), on=["p", "s"], suffix="_k")
+        x, y = j["q"].to_numpy(), j["q_k"].to_numpy()
+        keep.append(float(np.polyfit(x, y, 1)[0]) if len(x) >= 30 and x.std() > 0 else 0.0)
+    return QBFade(mean=float(df["q"].mean()), keep=tuple(keep))

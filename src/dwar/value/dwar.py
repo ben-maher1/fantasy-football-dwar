@@ -145,7 +145,10 @@ def value_inputs(
     n_total = first.posterior["posterior"].sizes["chain"] * first.posterior["posterior"].sizes["draw"]
     idx = draw_indices(n_total, cfg.draws)
     draws = {
-        p: PositionDraws.from_posterior(r.data, r.posterior, for_position(likelihood, p), idx) for p, r in fits.items()
+        p: PositionDraws.from_posterior(
+            r.data, r.posterior, for_position(likelihood, p), idx, fade_qb=p in cfg.qb_fade,
+        )
+        for p, r in fits.items()
     }
     recent = clock.complete[-cfg.replacement_seasons:]
     replacement = replacement_from_fits(fits, draws, fmt, recent, cfg.pool_min_games)

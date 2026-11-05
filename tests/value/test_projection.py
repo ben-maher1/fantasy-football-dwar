@@ -142,6 +142,19 @@ def test_qb_drift_moves_each_offseason_and_never_looks_back():
     np.testing.assert_allclose(out[0, 0], [10.0, 10.0 + per, 10.0 + 2 * per])
 
 
+def test_qb_fade_uses_todays_qb_next_offseason_then_fades():
+    from dataclasses import replace
+
+    from dwar.features.qb_rating import QBFade
+
+    rng = np.random.default_rng(0)
+    fade = QBFade(mean=0.5, keep=(0.25, 0.1))
+    d = replace(draws(3, [10.0]), qb_drift=np.full(3, 0.5), qb_drift_low=np.zeros(3), ps_qb_end=np.array([-1.5]), fade=fade)
+    out = project_talent(d, np.array([0]), np.array([2025]), np.array([26.0]), np.arange(2025, 2029), rng)
+    steps = 0.5 * np.array([-1.5, 0.5 + 0.25 * -2.0, 0.5 + 0.1 * -2.0])
+    np.testing.assert_allclose(out[0, 0], 10.0 + np.concatenate([[0.0], np.cumsum(steps)]))
+
+
 def test_form_rest_averages_the_decay_over_remaining_games():
     from dataclasses import replace
 

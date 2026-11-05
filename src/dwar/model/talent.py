@@ -160,12 +160,15 @@ def _shrunk_coefs(name: str, dim: str, sd: float) -> pt.TensorVariable:
     return pm.Normal(name, 0.0, sd, dims=dim)
 
 
-def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic"):
-    """Age effect from age minus AGE_CENTER (26); works on numpy or tensors."""
+def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic", beta3=0.0):
+    """Age effect from age minus AGE_CENTER (26); works on numpy or tensors.
+    "cubic" adds beta3 * a^3, so the peak and the later decline can differ
+    in shape from a parabola."""
     if curve == "hinge":
         a = age_c - (AGE_KNOT - 26.0)
         return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
-    return beta1 * age_c + beta2 * age_c**2
+    out = beta1 * age_c + beta2 * age_c**2
+    return out + beta3 * age_c**3 if curve == "cubic" else out
 
 
 GROWTH_YEARS = (2, 3)  # career years that add a growth step to the rookie level, kept from then on
@@ -308,7 +311,9 @@ def build_talent_model(
         else:
             beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
             beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
-        age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve)
+        # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
+        beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
+        age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve, beta3)
 
         # First-season latent talent per player. Rookies are non-centered
         # (little data each); veterans are centered, because their long

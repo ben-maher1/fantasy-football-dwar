@@ -105,7 +105,7 @@ class ModelConfig(_Frozen):
     situation_level: dict[str, tuple[str, ...]] = {}
     situation_range: dict[str, tuple[str, ...]] = {}
     # Per-position age curve (model/talent.py): quadratic (default) or hinge.
-    age_curve: dict[str, Literal["quadratic", "hinge"]] = {}
+    age_curve: dict[str, Literal["quadratic", "hinge", "cubic"]] = {}
     # Usage and early-career terms (model/talent.py), each a list of positions:
     # weekly opportunity points + per-player efficiency, a first-round step in
     # the rookie prior, and career-year growth scaled by draft capital.
@@ -136,6 +136,7 @@ def uses_situation(cfg: ModelConfig) -> bool:
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
+    qb_fade: tuple[str, ...] = ()            # positions whose QB-drift rating fades toward average in later seasons
     replacement_seasons: int = Field(gt=0)   # recent complete seasons that set replacement level
     pool_min_games: int = Field(ge=1)        # games for a player-season to count in that pool
     calibrate_spread: tuple[str, ...] = ()   # positions whose backtest learns a spread factor

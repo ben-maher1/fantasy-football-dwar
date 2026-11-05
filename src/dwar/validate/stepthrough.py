@@ -33,6 +33,7 @@ import polars as pl
 from scipy.stats import t as student_t
 
 from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
+from dwar.features.qb_rating import QBFade, qb_fade
 from dwar.model.data import ModelData
 from dwar.model.talent import (
     EARLY_GAMES,
@@ -79,11 +80,17 @@ class Settings:
     lam_form: np.ndarray | None = None
     qb_drift: np.ndarray | None = None      # offseason drift with the QB rating; None without it
     qb_drift_low: np.ndarray | None = None
+    fade: QBFade | None = None              # later seasons' QB fades toward average; None = carried forward
+    beta3: np.ndarray | None = None         # cubic age term; None = quadratic
 
-    def drift(self, q: float, draw: np.ndarray) -> np.ndarray | float:
-        """Mean offseason move given the QB rating `q` at the end of the season before."""
+    def drift(self, q: float, draw: np.ndarray, offseason: int = 1) -> np.ndarray | float:
+        """Mean offseason move given the QB rating `q` at the end of the season
+        before; `offseason` counts projected offseasons (later ones fade q
+        toward average when `fade` is set)."""
         if self.qb_drift is None:
             return 0.0
+        if self.fade is not None:
+            q = self.fade.expected(q, offseason)
         return self.qb_drift[draw] * q + self.qb_drift_low[draw] * min(q - QB_LOW_KNOT, 0.0)
 
     @property
@@ -95,7 +102,8 @@ class Settings:
         return len(self.tau)
 
     @classmethod
-    def from_posterior(cls, d: ModelData, posterior, likelihood: str, draws: np.ndarray) -> Settings:
+    def from_posterior(cls, d: ModelData, posterior, likelihood: str, draws: np.ndarray,
+                       fade_qb: bool = False) -> Settings:
         post = posterior["posterior"]
 
         def take(name: str, default: float | None = None, width: int | None = None) -> np.ndarray:
@@ -128,11 +136,15 @@ class Settings:
             lam_form=take("lam_form") if "rho_form" in post else None,
             qb_drift=take("qb_drift") if "qb_drift" in post else None,
             qb_drift_low=take("qb_drift_low") if "qb_drift" in post else None,
+            fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
+            if fade_qb and d.ps_qb_end is not None else None,
+            beta3=take("beta3") if "beta3" in post else None,
         )
 
 
 def _age_effect(s: Settings, age_c: float) -> np.ndarray:
-    return s.beta1 * age_c + s.beta2 * age_c**2
+    out = s.beta1 * age_c + s.beta2 * age_c**2
+    return out if s.beta3 is None else out + s.beta3 * age_c**3
 
 
 def _growth(s: Settings, cy: int, pick_z: float) -> np.ndarray:
@@ -283,13 +295,15 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
     out: list[np.ndarray | None] = []
     cg = float(p.career_games[j][done]) if done < len(p.career_games[j]) else float(p.career_games[j][-1] + 1)
     prev_season = p.seasons[j]
-    # Later seasons' QBs are unknown: the current one is carried forward.
+    # Later seasons' QBs are unknown: the current one is carried forward,
+    # or faded toward average (Settings.fade).
     q = p.qb_before(j, done)
     for h, n_games in enumerate(horizon_games):
         season = p.seasons[j] + h
         if h > 0 and n_games:
             # One drift per step between seasons played, as in the fit.
-            x = x + s.drift(q, draw) + s.tau[draw] * np.sqrt(season - prev_season) * rng.standard_normal(r)
+            # The QB behind this drift is season (j + h - 1)'s: h - 1 seasons on.
+            x = x + s.drift(q, draw, h) + s.tau[draw] * np.sqrt(season - prev_season) * rng.standard_normal(r)
             dev = np.zeros(r)
         if not n_games:
             out.append(None)

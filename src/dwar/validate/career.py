@@ -85,6 +85,18 @@ VARIANTS: dict[str, dict] = {
     # "form" replaced weekly noise; qb4 = qb3 with form's spread a fraction
     # of the weekly noise's (model/talent.py form_ratio).
     "qb4": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500}},
+    # ben, 2026-11-05 (Jalen Coker): qb4 carries today's QB into every
+    # projected season. A WR's QB rating keeps only ~0.26 of its distance
+    # from average a season later (QBs and teams change): qbfade fades it
+    # (features/qb_rating.QBFade). Same model as qb4 (holdout: reuses qb3's fit).
+    "qbfade": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+               "fade_qb": True, "reuse_fit": {"holdout": "qb3"}},
+    # qbfade tied qb4 (dev discounted MAE +0.003, log -0.001; holdout +0.001/0.000)
+    # and is kept (config/value.yaml qb_fade): it matches how little a QB rating carries.
+    # ... and a cubic WR age curve: the quadratic peaks at ~24. Tied too (dev
+    # MAE -0.003, log -0.002); peak still ~25, gentler after 30: not kept.
+    "cubic": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "age_curve": {POSITION: "cubic"}},
 }
 
 
@@ -101,6 +113,8 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     fit_as_of, test_seasons = PERIODS[period]
     base = load_model_config()
     v = dict(VARIANTS[name])
+    fade = v.pop("fade_qb", False)
+    reuse = v.pop("reuse_fit", {}).get(period)
     if "sampler" in v:
         v["sampler"] = base.sampler.model_copy(update=v["sampler"])
     cfg = base.model_copy(update={"first_season": FIRST_SEASON, "positions": (POSITION,)} | v)
@@ -109,6 +123,9 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     fit_tables = _tables(fit_as_of)
     d = position_data(fit_tables, POSITION, cfg)
     nc = out / "fit.nc"
+    if reuse and not nc.exists():
+        # Same model as `reuse`: only the step-through differs.
+        nc.symlink_to(root(reuse, period) / "fit.nc")
     if nc.exists():
         posterior = xr.open_datatree(nc)
     else:
@@ -121,7 +138,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
         log.info("%s fit: passed=%s runtime %.0fs %s", name, diag.passed, runtime, diag.failures)
     total = posterior["posterior"].sizes["chain"] * posterior["posterior"].sizes["draw"]
     draws = np.random.default_rng(seed).choice(total, N_SETTINGS, replace=False)
-    settings = Settings.from_posterior(d, posterior, cfg.likelihood_for(POSITION), np.sort(draws))
+    settings = Settings.from_posterior(d, posterior, cfg.likelihood_for(POSITION), np.sort(draws), fade_qb=fade)
     full = build_model_data(
         _tables(OUTCOMES_AS_OF), POSITION, FIRST_SEASON, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids,

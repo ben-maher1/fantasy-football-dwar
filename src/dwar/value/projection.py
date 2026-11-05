@@ -16,6 +16,7 @@ import numpy as np
 from xarray import DataTree
 
 from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
+from dwar.features.qb_rating import QBFade, qb_fade
 from dwar.model.data import AGE_CENTER, ModelData
 from dwar.model.talent import (
     LIKELIHOOD_PARAMS,
@@ -57,13 +58,20 @@ class PositionDraws:
     qb_drift: np.ndarray | None = None     # (draws,) offseason drift per unit of QB rating
     qb_drift_low: np.ndarray | None = None
     ps_qb_end: np.ndarray | None = None    # (player_seasons,) QB rating in the season's last game
+    fade: QBFade | None = None             # later seasons' QB fades toward average; None = carried forward
+    beta3: np.ndarray | None = None        # (draws,) cubic age term; None = quadratic or hinge
 
-    def drift(self, ps_idx: np.ndarray) -> np.ndarray | float:
+    def drift(self, ps_idx: np.ndarray, offseason: np.ndarray | int = 1) -> np.ndarray | float:
         """(draws, players) mean offseason move from the QB the player had
-        last (carried forward: later seasons' QBs are unknown); 0 without it."""
+        last; 0 without it. Later seasons' QBs are unknown: the last one is
+        carried forward, or with `fade` the rating fades toward average by
+        the `offseason`-th projected offseason (per player)."""
         if self.qb_drift is None or self.ps_qb_end is None:
             return 0.0
-        q = self.ps_qb_end[ps_idx][None, :]
+        q = self.ps_qb_end[ps_idx]
+        if self.fade is not None:
+            q = self.fade.expected(q, offseason)
+        q = np.asarray(q)[None, :]
         return self.qb_drift[:, None] * q + self.qb_drift_low[:, None] * np.minimum(q - QB_LOW_KNOT, 0.0)
 
     def form_rest(self, ps_idx: np.ndarray, remaining: np.ndarray) -> np.ndarray | float:
@@ -88,7 +96,8 @@ class PositionDraws:
 
     @classmethod
     def from_posterior(
-        cls, d: ModelData, posterior: DataTree, likelihood: str, draw_idx: np.ndarray
+        cls, d: ModelData, posterior: DataTree, likelihood: str, draw_idx: np.ndarray,
+        fade_qb: bool = False,
     ) -> PositionDraws:
         def take(name: str) -> np.ndarray:
             v = np.asarray(posterior["posterior"][name].values)
@@ -115,7 +124,7 @@ class PositionDraws:
             zero_value=d.zero_week_mean,
             eta=maybe("eta"),
             kappa=maybe("kappa"),
-            age_curve="hinge" if hinge else "quadratic",
+            age_curve="hinge" if hinge else ("cubic" if "beta3" in posterior["posterior"] else "quadratic"),
             growth=maybe("growth"),
             growth_pick=maybe("growth_pick"),
             career_year=getattr(d, "ps_career_year", None),
@@ -127,11 +136,15 @@ class PositionDraws:
             qb_drift=maybe("qb_drift"),
             qb_drift_low=maybe("qb_drift_low"),
             ps_qb_end=getattr(d, "ps_qb_end", None),
+            fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
+            if fade_qb and getattr(d, "ps_qb_end", None) is not None else None,
+            beta3=maybe("beta3"),
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
         a = np.asarray(age) - AGE_CENTER
-        return age_curve_effect(a, self.beta1[:, None], self.beta2[:, None], self.age_curve)
+        b3 = 0.0 if self.beta3 is None else self.beta3[:, None]
+        return age_curve_effect(a, self.beta1[:, None], self.beta2[:, None], self.age_curve, b3)
 
     def expected_points(self, latent: np.ndarray) -> np.ndarray:
         center = link(latent, self.likelihood, lib=np)
@@ -172,7 +185,7 @@ def project_latent(
         step = draws.tau[:, None] * np.sqrt(ahead) * rng.standard_normal(latent.shape)
         if vol is not None:
             step = step * vol[:, :, j]
-        step = step + np.where(ahead[None] > 0, draws.drift(ps_idx), 0.0)  # one drift per offseason, as in the fit
+        step = step + np.where(ahead[None] > 0, draws.drift(ps_idx, season - last_season), 0.0)  # one drift per offseason, as in the fit
         latent = latent + draws.age_effect(age_next) - draws.age_effect(age_prev) + step
         prev = np.maximum(prev, season)
         out[:, :, j] = latent if shift is None else latent + shift[:, :, j]
