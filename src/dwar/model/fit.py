@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import time
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -17,14 +18,21 @@ import numpy as np
 import nutpie
 import polars as pl
 import xarray as xr
+from nutpie import zarr_store
 from xarray import DataTree
 
-from dwar.config import ModelConfig
+from dwar.config import ModelConfig, data_dir
 from dwar.features.player_tables import PlayerTables
 from dwar.features.situation import Covariates
 from dwar.model.data import ModelData, build_model_data
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
-from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, is_hurdle, simulate_weeks
+from dwar.model.talent import (
+    LIKELIHOOD_PARAMS,
+    build_talent_model,
+    form_dev_last,
+    is_hurdle,
+    simulate_weeks,
+)
 
 log = logging.getLogger(__name__)
 
@@ -52,14 +60,52 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         d, cfg.likelihood_for(p), cfg.age_curve.get(p, "quadratic"),
         round1=p in cfg.rookie_round1, growth=p in cfg.growth,
         opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
+        game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
+        form_rho=cfg.form_rho,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler
-    return nutpie.sample(
-        compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False,
-        save_warmup=False,
-    )
+    # Draws go to a zarr store on disk while sampling: held in memory, the
+    # game-by-game WR fit (a form term per game) ran out of memory.
+    with tempfile.TemporaryDirectory(dir=data_dir()) as tmp:
+        nutpie.sample(
+            compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=s.tune, chains=s.chains, seed=cfg.seed,
+            progress_bar=False, save_warmup=False, zarr_store=zarr_store.LocalStore(tmp),
+        )
+        posterior = _compact(Path(tmp), d)
+    # The zarr store adds dict attributes (sampler settings) netCDF cannot save.
+    for node in posterior.subtree:
+        node.attrs = {k: v for k, v in node.attrs.items() if isinstance(v, (str, int, float, np.number))}
+    return posterior
+
+
+def _compact(store: Path, d: ModelData) -> DataTree:
+    """The posterior and sample stats, loaded into memory, without warmup.
+    The "form" mode's per-game shocks (`form_z`, one per game per draw: about
+    3.4 GB for WR 2013-2026) are replaced by what forecasting needs, the form
+    after each player-season's last game (`form_dev`), computed a chain at a
+    time. Fit checks then cover the form term through its settings
+    (rho_form, sigma_form, lam_form) rather than every per-game shock."""
+    import zarr
+
+    lazy = xr.open_datatree(store, engine="zarr", consolidated=False)
+    post = lazy["posterior"].to_dataset()
+    post = post.drop_vars([v for v in post.data_vars if str(v).endswith("__")])  # unconstrained copies
+    if "form_z" in post:
+        post = post.drop_vars("form_z").load()
+        shocks = zarr.open_array(store / "posterior" / "form_z", mode="r")  # read a chain at a time
+        dev = np.stack([
+            form_dev_last(d, np.asarray(shocks[c]), post["rho_form"].values[c], post["sigma_form"].values[c],
+                          post["lam_form"].values[c])
+            for c in range(post.sizes["chain"])
+        ])
+        post["form_dev"] = (("chain", "draw", "form_player_season"), dev)
+    stats = lazy["sample_stats"].to_dataset()
+    # Per-draw stats only (divergences, energy, step size, ...): the store also
+    # holds per-draw gradients and positions, several GB each here.
+    stats = stats[[v for v in stats.data_vars if stats[v].dims == ("chain", "draw")]]
+    return DataTree.from_dict({"posterior": post.load(), "sample_stats": stats.load()})
 
 
 def _draws(posterior: DataTree, name: str) -> np.ndarray:
@@ -162,7 +208,7 @@ def position_data(
     c = (cov or {}).get(position)
     extra = {"opportunity": opportunity} if opportunity is not None and position in cfg.opportunity else {}
     return build_model_data(
-        tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0),
+        tables, position, cfg.first_season_by_position.get(position, cfg.first_season), min_plays=cfg.min_plays.get(position, 0),
         season_covariates=c.level if c is not None and c.level.width > 2 else None,
         season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
         **extra,

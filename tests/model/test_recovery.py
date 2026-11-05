@@ -13,6 +13,14 @@ from dwar.model.talent import scale_of
 from .simulate import SEASON_EFFECT, USAGE_TRUTH, simulate
 
 
+def core_config():
+    """The config without the game-by-game terms the production WR model
+    adds (tested on their own below): the simulated receivers have none."""
+    return load_model_config().model_copy(update={
+        "game_steps": (), "qb_drift": (), "draws_by_position": {}, "first_season_by_position": {},
+    })
+
+
 def interval(posterior, name: str, lo: float, hi: float) -> np.ndarray:
     values = np.asarray(posterior["posterior"][name].values)
     return np.percentile(values.reshape(-1, *values.shape[2:]), [lo, hi], axis=0)
@@ -21,7 +29,7 @@ def interval(posterior, name: str, lo: float, hi: float) -> np.ndarray:
 @pytest.fixture(scope="module")
 def recovered(tmp_path_factory):
     sim = simulate(n_players=300)
-    result = fit(sim.data, load_model_config(), tmp_path_factory.mktemp("fit"))
+    result = fit(sim.data, core_config(), tmp_path_factory.mktemp("fit"))
     return sim, result
 
 
@@ -77,7 +85,7 @@ def test_outputs_written(recovered, tmp_path_factory):
 
 
 def test_season_covariate_slot(tmp_path):
-    cfg = load_model_config()
+    cfg = core_config()
     effect = SEASON_EFFECT[scale_of(cfg.likelihood)]
     sim = simulate(n_players=120, season_effect=effect, seed=11)
     assert sim.data.season_x_names == ("boost",)
@@ -89,7 +97,7 @@ def test_season_covariate_slot(tmp_path):
 def test_range_covariate_slot(tmp_path):
     """A flag that makes a season's step exp(0.7), about twice, as large is
     recovered, and the yearly step size is not inflated to absorb it."""
-    cfg = load_model_config()
+    cfg = core_config()
     sim = simulate(n_players=300, range_effect=0.7, seed=13)
     assert sim.data.season_vol_x_names == ("moved",)
     result = fit(sim.data, cfg, tmp_path)
@@ -102,7 +110,7 @@ def test_range_covariate_slot(tmp_path):
 
 def test_same_seed_same_draws():
     sim = simulate(n_players=30, weeks_per_season=6, seed=3)
-    cfg = load_model_config()
+    cfg = core_config()
     cfg = cfg.model_copy(update={"sampler": cfg.sampler.model_copy(update={"tune": 100, "draws": 50})})
     a = sample(sim.data, cfg)["posterior"]["tau"].values
     b = sample(sim.data, cfg)["posterior"]["tau"].values
@@ -112,7 +120,7 @@ def test_same_seed_same_draws():
 @pytest.fixture(scope="module")
 def recovered_usage(tmp_path_factory):
     sim = simulate(n_players=300, usage=True, seed=17)
-    cfg = load_model_config().model_copy(update={"opportunity": ("WR",), "rookie_round1": ("WR",), "growth": ("WR",)})
+    cfg = core_config().model_copy(update={"opportunity": ("WR",), "rookie_round1": ("WR",), "growth": ("WR",)})
     return sim, fit(sim.data, cfg, tmp_path_factory.mktemp("fit_usage"))
 
 
@@ -138,3 +146,44 @@ def test_usage_talent_interval_coverage(recovered_usage):
     t = result.talent
     covered_90 = (t["talent_p05"].to_numpy() <= sim.talent) & (sim.talent <= t["talent_p95"].to_numpy())
     assert 0.80 <= covered_90.mean() <= 0.97
+
+
+@pytest.fixture(scope="module")
+def recovered_games(tmp_path_factory):
+    sim = simulate(n_players=300, game_steps=True)
+    # Lasting per-game steps ("walk", tested and not used in production)
+    # mix slowly on sigma_game: 3000 draws.
+    cfg = core_config().model_copy(update={"game_steps": ("WR",), "game_mode": "walk", "draws_by_position": {"WR": 3000}})
+    return sim, fit(sim.data, cfg, tmp_path_factory.mktemp("fit_games"))
+
+
+def test_game_steps_recovered(recovered_games):
+    """Per-game steps and their early-career boost are recovered, and the
+    season-level parameters still are."""
+    sim, result = recovered_games
+    assert result.diagnostics.passed, result.diagnostics.failures
+    for name, truth in sim.truth.items():
+        lo, hi = interval(result.posterior, name, 0.5, 99.5)
+        assert lo <= truth <= hi, f"{name}: {truth} outside 99% [{lo:.3f}, {hi:.3f}]"
+
+
+@pytest.fixture(scope="module")
+def recovered_form(tmp_path_factory):
+    from .simulate import FORM_RHO
+
+    sim = simulate(n_players=300, form=True, seed=4)
+    # Production WR draws (config draws_by_position); 2000 left beta1 at R-hat 1.011.
+    cfg = core_config().model_copy(update={"game_steps": ("WR",), "game_mode": "form", "form_rho": FORM_RHO,
+                                           "draws_by_position": {"WR": 3500}})
+    return sim, fit(sim.data, cfg, tmp_path_factory.mktemp("fit_form"))
+
+
+def test_form_recovered(recovered_form):
+    """The production WR mode: in-season form's size (as a share of weekly
+    noise) and early-career boost are recovered, with the decay rate held
+    at its true value as config holds it, and season-level parameters still are."""
+    sim, result = recovered_form
+    assert result.diagnostics.passed, result.diagnostics.failures
+    for name, truth in sim.truth.items():
+        lo, hi = interval(result.posterior, name, 0.5, 99.5)
+        assert lo <= truth <= hi, f"{name}: {truth} outside 99% [{lo:.3f}, {hi:.3f}]"

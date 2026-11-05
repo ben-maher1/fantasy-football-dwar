@@ -10,10 +10,18 @@ from datetime import date
 import numpy as np
 import polars as pl
 
+from dwar.config import load_model_config
 from dwar.features.player_tables import PlayerTables
 from dwar.model.data import ModelData, build_model_data
-from dwar.config import load_model_config
-from dwar.model.talent import LIKELIHOOD_PARAMS, growth_design, link, scale_of, simulate_weeks, talent_from_center
+from dwar.model.talent import (
+    EARLY_GAMES,
+    LIKELIHOOD_PARAMS,
+    growth_design,
+    link,
+    scale_of,
+    simulate_weeks,
+    talent_from_center,
+)
 
 # Latent truth on each likelihood's latent scale (points, or sqrt(points)
 # for sqrt_hurdle, log(loc) for sqrt_hurdle_log, where 3.0 is about 9 ppg). The sqrt values sit
@@ -51,6 +59,11 @@ USAGE_TRUTH = {
     "alpha_round1": 0.3, "growth": (0.25, 0.15), "growth_pick": (-0.1, -0.05),
     "sigma_eff": 0.25, "delta_x": 0.1, "sigma_x": 0.4, "nu_x": 10.0,
 }
+# Game-step truth (sqrt scale): talent moves after every game, more early in a career.
+GAME_TRUTH = {"sigma_game": 0.06, "lam_game": 1.0}
+# "form" mode: decay held at FORM_RHO (as config holds it), form SD = form_ratio * sigma.
+FORM_RHO = 0.74
+FORM_TRUTH = {"form_ratio": 0.45, "lam_form": 0.4}
 
 
 @dataclass(frozen=True)
@@ -61,6 +74,8 @@ class Simulated:
     talent: np.ndarray  # true talent (expected ppg) per player-season, aligned with data.ps_keys
     realized: dict      # sample statistics of the simulated draws (see below)
     usage: bool = False
+    game_steps: bool = False
+    form: bool = False
 
     @property
     def scale(self) -> str:
@@ -74,7 +89,8 @@ class Simulated:
     def truth(self) -> dict[str, float]:
         params = {k: v for k, v in LIKELIHOOD_TRUTH[self.likelihood].items() if k in LIKELIHOOD_PARAMS[self.likelihood]}
         usage = {k: v for k, v in USAGE_TRUTH.items() if isinstance(v, float)} if self.usage else {}
-        return LATENT_TRUTH[self.scale] | params | self.realized | usage
+        games = GAME_TRUTH if self.game_steps else FORM_TRUTH if self.form else {}
+        return LATENT_TRUTH[self.scale] | params | self.realized | usage | games
 
 
 def _tables(players: pl.DataFrame, seasons: pl.DataFrame, weeks: pl.DataFrame) -> PlayerTables:
@@ -94,13 +110,17 @@ def simulate(
     likelihood: str | None = None,
     range_effect: float | None = None,
     usage: bool = False,
+    game_steps: bool = False,
+    form: bool = False,
 ) -> Simulated:
     """`season_effect`, if given, adds one season covariate with that true
     coefficient, to test the covariate slot. `range_effect`, if given, adds
     a 0/1 flag (a third of seasons) that multiplies that season's step by
     exp(range_effect). `likelihood` defaults to the configured one. With
     `usage`, the truth adds USAGE_TRUTH (sqrt scale) and the data carry
-    weekly opportunity points (`Simulated.opportunity`)."""
+    weekly opportunity points (`Simulated.opportunity`). With `game_steps`,
+    each week's latent talent adds GAME_TRUTH per-game steps (sqrt scale);
+    `talent` stays the per-season level the model reports."""
     likelihood = likelihood or load_model_config().likelihood
     rng = np.random.default_rng(seed)
     player_rows, season_rows = [], []
@@ -182,11 +202,36 @@ def simulate(
 
     keys = d0.ps_keys.select("player_id", "season")
     n = weeks_per_season
+    week_center = np.repeat(center, n)
+    if game_steps:
+        g = GAME_TRUTH
+        player = np.repeat(d0.ps_player, n)  # weeks in career order: players, then seasons, then weeks
+        first = np.r_[True, player[1:] != player[:-1]]
+        starts = np.maximum.accumulate(np.where(first, np.arange(len(player)), 0))
+        career_games = np.arange(len(player)) - starts
+        sd = g["sigma_game"] * np.exp(g["lam_game"] * np.exp(-career_games / EARLY_GAMES))
+        step = np.where(first, 0.0, sd * rng.normal(size=len(player)))
+        c = np.cumsum(step)
+        week_center = link(np.repeat(latent, n) + c - c[starts], likelihood, lib=np)
+    elif form:
+        # Within each season, dev_j = rho * dev_(j-1) + e_j (the model's "form" mode).
+        f = FORM_TRUTH
+        player = np.repeat(d0.ps_player, n)
+        first = np.r_[True, player[1:] != player[:-1]]
+        starts = np.maximum.accumulate(np.where(first, np.arange(len(player)), 0))
+        career_games = np.arange(len(player)) - starts
+        sd = (f["form_ratio"] * LIKELIHOOD_TRUTH[likelihood]["sigma"] * np.sqrt(1 - FORM_RHO**2)
+              * np.exp(f["lam_form"] * np.exp(-career_games / EARLY_GAMES)))
+        e = sd * rng.normal(size=len(player))
+        dev = np.zeros(len(player))
+        for j in range(len(player)):
+            dev[j] = e[j] + (FORM_RHO * dev[j - 1] if j % n else 0.0)  # resets at each season's first week
+        week_center = link(np.repeat(latent, n) + dev, likelihood, lib=np)
     weeks = pl.DataFrame({
         "player_id": np.repeat(keys["player_id"].to_numpy(), n),
         "season": np.repeat(keys["season"].to_numpy(), n),
         "week": np.tile(np.arange(1, n + 1), keys.height).astype(np.int32),
-        "fpts": simulate_weeks(likelihood, np.repeat(center, n), LIKELIHOOD_TRUTH[likelihood], rng),
+        "fpts": simulate_weeks(likelihood, week_center, LIKELIHOOD_TRUTH[likelihood], rng),
     })
     opportunity = None
     if usage:
@@ -207,4 +252,7 @@ def simulate(
         {"mu_vet": float(vet_start.mean()), "sigma_vet": float(vet_start.std(ddof=1))}
         if len(vet_start) > 1 else {}
     )
-    return Simulated(tables=tables, data=data, likelihood=likelihood, talent=talent, realized=realized, usage=usage)
+    return Simulated(
+        tables=tables, data=data, likelihood=likelihood, talent=talent, realized=realized, usage=usage,
+        game_steps=game_steps, form=form,
+    )

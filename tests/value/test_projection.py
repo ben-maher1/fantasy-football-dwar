@@ -1,8 +1,7 @@
 import numpy as np
-import pytest
 
-from dwar.value.projection import PositionDraws, inverse_softplus, project_talent
 from dwar.model.talent import softplus
+from dwar.value.projection import PositionDraws, inverse_softplus, project_talent
 
 
 def draws(n: int, talent: list[float], beta1=0.0, beta2=0.0, tau=0.0) -> PositionDraws:
@@ -128,3 +127,25 @@ def test_growth_steps_follow_career_year_and_draft_capital():
     np.testing.assert_allclose(out[0, 0], [8.0, 9.5, 10.0, 10.0])  # year-2 step 1 + 0.5 for a high pick
     np.testing.assert_allclose(out[0, 1], [8.0, 8.5, 9.0, 9.0])    # a late pick: 1 - 0.5
     np.testing.assert_allclose(out[0, 2], 8.0)
+
+
+def test_qb_drift_moves_each_offseason_and_never_looks_back():
+    from dataclasses import replace
+
+    from dwar.features.qb_rating import LOW_KNOT
+
+    rng = np.random.default_rng(0)
+    q = LOW_KNOT - 1.0  # one unit below the knot
+    d = replace(draws(3, [10.0]), qb_drift=np.full(3, 0.5), qb_drift_low=np.full(3, 1.0), ps_qb_end=np.array([q]))
+    out = project_talent(d, np.array([0]), np.array([2025]), np.array([26.0]), np.arange(2025, 2028), rng)
+    per = 0.5 * q - 1.0
+    np.testing.assert_allclose(out[0, 0], [10.0, 10.0 + per, 10.0 + 2 * per])
+
+
+def test_form_rest_averages_the_decay_over_remaining_games():
+    from dataclasses import replace
+
+    d = replace(draws(2, [10.0, 8.0]), rho_form=np.array([0.5, 0.5]), form_dev=np.array([[2.0, -1.0], [2.0, -1.0]]))
+    got = d.form_rest(np.array([0, 1]), np.array([2, 0]))
+    np.testing.assert_allclose(got[:, 0], 2.0 * (0.5 + 0.25) / 2)
+    np.testing.assert_allclose(got[:, 1], 0.0)  # no games left: no form

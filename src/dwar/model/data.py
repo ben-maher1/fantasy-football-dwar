@@ -52,6 +52,10 @@ class ModelData:
     # prior, which already reflects their career stage, so growth terms skip them.
     ps_career_year: np.ndarray | None = None
     x: np.ndarray | None = None             # (n_obs,) weekly opportunity points; NaN where unknown
+    obs_week: np.ndarray | None = None      # (n_obs,) week of the season
+    obs_career_games: np.ndarray | None = None  # (n_obs,) games the player had played before this one, whole career
+    obs_qb: np.ndarray | None = None        # (n_obs,) rating of that game's QB (features/qb_rating.py); 0 when unknown
+    ps_qb_end: np.ndarray | None = None     # (n_ps,) the QB rating in the player's last game of that season
 
     @property
     def n_obs(self) -> int:
@@ -69,20 +73,27 @@ class ModelData:
 FLAG_MERGE_SHARE = 0.01  # flags differing on fewer than this share of rows are merged
 
 
-def standardize_with_flags(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.DataFrame:
+def standardize_with_flags(
+    df: pl.DataFrame, columns: tuple[str, ...], ref: pl.DataFrame | None = None,
+) -> pl.DataFrame:
     """z-score each column over its non-null values; nulls become 0 with a
     missing flag so a missing combine drill is neither dropped nor mistaken
     for an average one. Flags that are always 0 are dropped, and flags that
     are identical or nearly so (height and weight are missing together, bar
     a player or two) are merged into one that is set if either is, since
     near-duplicate columns leave their coefficients barely identified and
-    the sampler mixes poorly on them."""
-    zs, flags = [], []  # flags: [names, missing array]
+    the sampler mixes poorly on them.
+
+    With `ref`, the means, SDs and flag columns come from `ref` and are
+    applied to `df`, so new players are scored on the scale a fit learned."""
+    ref = df if ref is None else ref
+    zs, flags = [], []  # flags: [names, missing array in ref]
     for c in columns:
         x = pl.col(c).cast(pl.Float64)
-        sd = df[c].cast(pl.Float64).std()
-        zs.append(((x - x.mean()) / (sd if sd and sd > 0 else 1.0)).fill_null(0.0).alias(f"{c}_z"))
-        missing = df[c].is_null().to_numpy()
+        r = ref[c].cast(pl.Float64)
+        sd = r.std()
+        zs.append(((x - r.mean()) / (sd if sd and sd > 0 else 1.0)).fill_null(0.0).alias(f"{c}_z"))
+        missing = ref[c].is_null().to_numpy()
         if not missing.any():
             continue
         for flag in flags:
@@ -92,8 +103,11 @@ def standardize_with_flags(df: pl.DataFrame, columns: tuple[str, ...]) -> pl.Dat
                 break
         else:
             flags.append([[c], missing])
-    flag_cols = [pl.Series("_".join(names) + "_missing", key, dtype=pl.Float64) for names, key in flags]
-    return df.select(zs).with_columns(flag_cols)
+    flag_cols = [
+        pl.any_horizontal([pl.col(n).is_null() for n in names]).cast(pl.Float64).alias("_".join(names) + "_missing")
+        for names, _ in flags
+    ]
+    return df.select(*zs, *flag_cols)
 
 
 def _unplayed_rookie_seasons(tables: PlayerTables, position: str, first_season: int) -> pl.DataFrame:
@@ -138,6 +152,7 @@ def build_model_data(
     unplayed_rookies: bool = True,
     min_plays: int = 0,
     opportunity: pl.DataFrame | None = None,
+    reference_players: tuple[str, ...] | None = None,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -156,7 +171,11 @@ def build_model_data(
     `opportunity` (player_id, season, week, xfpts; features/opportunity.py)
     adds each observed week's opportunity points. A week in a season the
     table covers but with no row had no opportunities (0); weeks in seasons
-    it does not cover are NaN and carry no opportunity information."""
+    it does not cover are NaN and carry no opportunity information.
+
+    `reference_players` (a fit's `player_ids`) sets the draft-pick and
+    combine standardization, so data built later for new players matches
+    the scale that fit learned (used to step a fit through later seasons)."""
     weeks = tables.player_weeks.filter(
         (pl.col("position") == position) & (pl.col("season") >= first_season)
     )
@@ -203,7 +222,10 @@ def build_model_data(
 
     players = ps.select("player_id", "player_idx").unique().sort("player_idx")
     static = players.join(tables.player_static, on="player_id", how="left").sort("player_idx")
-    drafted = static.filter(pl.col("draft_pick").is_not_null())
+    ref_static = static if reference_players is None else (
+        pl.DataFrame({"player_id": list(reference_players)}).join(tables.player_static, on="player_id", how="left")
+    )
+    drafted = ref_static.filter(pl.col("draft_pick").is_not_null())
     log_pick = pl.col("draft_pick").fill_null(UNDRAFTED_PICK).cast(pl.Float64).log()
     mu = drafted.select(log_pick.mean()).item() if drafted.height else 0.0
     sd = drafted.select(log_pick.std()).item() if drafted.height > 1 else 1.0
@@ -213,7 +235,7 @@ def build_model_data(
         pre_window=(pl.col("first_season").fill_null(first_season) < first_season).cast(pl.Float64),
     )
 
-    prospect = standardize_with_flags(static, COMBINE_FEATURES)
+    prospect = standardize_with_flags(static, COMBINE_FEATURES, None if reference_players is None else ref_static)
     if prospect_covariates is not None:
         extra = (
             players.join(prospect_covariates, on="player_id", how="left")
@@ -248,7 +270,29 @@ def build_model_data(
         .select(cy=(pl.col("season") - entry + 1).clip(lower_bound=1))
     )
 
+    if "week" not in obs.columns:  # tables without weeks (small tests): rows are in game order
+        obs = obs.with_columns(week=(pl.int_range(pl.len()).over("player_id", "season", order_by="_row") + 1).cast(pl.Int64))
+    all_weeks = tables.player_weeks
+    if "week" not in all_weeks.columns:
+        all_weeks = all_weeks.with_row_index("_r").with_columns(
+            week=(pl.int_range(pl.len()).over("player_id", "season", order_by="_r") + 1).cast(pl.Int64)
+        )
+    prior_games = (
+        all_weeks.select("player_id", "season", pl.col("week").cast(pl.Int64))
+        .unique()
+        .sort("player_id", "season", "week")
+        .with_columns(career_games=pl.int_range(pl.len()).over("player_id"))
+    )
+    obs = obs.with_columns(pl.col("week").cast(pl.Int64)).join(
+        prior_games, on=["player_id", "season", "week"], how="left"
+    ).sort("_row")
     y = obs["fpts"].to_numpy().astype(float)
+    obs_qb = (obs["qb_rating"].fill_null(0.0).to_numpy().astype(float) if "qb_rating" in obs.columns
+              else np.zeros(obs.height))
+    ends = (pl.DataFrame({"ps_idx": obs["ps_idx"], "week": obs["week"], "q": obs_qb})
+            .sort("ps_idx", "week").group_by("ps_idx").agg(pl.col("q").last()))
+    ps_qb_end = np.zeros(ps.height)
+    ps_qb_end[ends["ps_idx"].to_numpy()] = ends["q"].to_numpy()
     return ModelData(
         position=position,
         y=y,
@@ -276,4 +320,8 @@ def build_model_data(
             player_feats["pre_window"].to_numpy()[ps["player_idx"].to_numpy()] > 0, 0, career["cy"].to_numpy()
         ).astype(np.int64),
         x=x,
+        obs_week=obs["week"].to_numpy().astype(np.int64),
+        obs_career_games=obs["career_games"].fill_null(0).to_numpy().astype(float),
+        obs_qb=obs_qb,
+        ps_qb_end=ps_qb_end,
     )

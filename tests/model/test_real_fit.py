@@ -24,7 +24,7 @@ def test_real_wr_fit(tmp_path):
         pull(name)
     tables = build_player_tables(asof_snapshot(RawTables.from_cache(), AS_OF), load_scoring("ppr"))
     cfg = load_model_config()
-    d = build_model_data(tables, "WR", cfg.first_season)
+    d = build_model_data(tables, "WR", cfg.first_season_by_position.get("WR", cfg.first_season))
     result = fit(d, cfg, tmp_path, meta={"as_of": AS_OF.isoformat(), "scoring": "ppr"})
 
     assert result.diagnostics.passed

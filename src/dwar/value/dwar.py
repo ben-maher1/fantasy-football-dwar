@@ -285,13 +285,23 @@ def position_dwar(
     seasons = np.arange(clock.current - 1, clock.current + cfg.horizon_seasons + 1)
     shift, vol = _situation(position, r, inputs, latest, seasons)
     talent = project_talent(pd_, latest["ps_idx"].to_numpy(), last_season, last_age, seasons, rng, shift, vol)
+    remaining = np.array([clock.remaining.get(t, clock.remaining_default) for t in latest["team"].to_list()])
+    if pd_.form_dev is not None:
+        # The rest of the current season also carries recent form, fading game by game.
+        cur = seasons == clock.current
+        in_cur = last_season == clock.current
+        if cur.any() and in_cur.any():
+            ps_idx = latest["ps_idx"].to_numpy()
+            form = pd_.form_rest(ps_idx, remaining)
+            with_form = pd_.expected_points(pd_.latent[:, ps_idx] + form)
+            j = int(np.flatnonzero(cur)[0])
+            talent[:, :, j] = np.where(in_cur[None], with_form, talent[:, :, j])
     talent = widen(talent, cfg.spread_factor.get(position, 1.0), axis=0)
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
 
     av = inputs.availability
     repl = inputs.replacement[position][:, None]
-    remaining = np.array([clock.remaining.get(t, clock.remaining_default) for t in latest["team"].to_list()])
     short = inputs.short.get(position)
     short_rate = short.rates(latest["player_id"].to_list(), _next_roles(position, inputs, latest))[None, :] if short else 0.0
     short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0

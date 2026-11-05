@@ -15,8 +15,17 @@ from dataclasses import dataclass
 import numpy as np
 from xarray import DataTree
 
+from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
 from dwar.model.data import AGE_CENTER, ModelData
-from dwar.model.talent import LIKELIHOOD_PARAMS, age_curve_effect, growth_design, link, scale_of, talent_from_center
+from dwar.model.talent import (
+    LIKELIHOOD_PARAMS,
+    age_curve_effect,
+    form_dev_last,
+    growth_design,
+    link,
+    scale_of,
+    talent_from_center,
+)
 
 
 def inverse_softplus(y: np.ndarray) -> np.ndarray:
@@ -43,6 +52,31 @@ class PositionDraws:
     growth_pick: np.ndarray | None = None  # (draws, len(GROWTH_YEARS)) their draft-capital slopes
     career_year: np.ndarray | None = None  # (player_seasons,) career year of each fitted season, 0 for veterans
     ps_pick_z: np.ndarray | None = None    # (player_seasons,) the player's standardized log pick
+    rho_form: np.ndarray | None = None     # (draws,) "form" mode: per-game decay of in-season form
+    form_dev: np.ndarray | None = None     # (draws, player_seasons) form after each season's last game
+    qb_drift: np.ndarray | None = None     # (draws,) offseason drift per unit of QB rating
+    qb_drift_low: np.ndarray | None = None
+    ps_qb_end: np.ndarray | None = None    # (player_seasons,) QB rating in the season's last game
+
+    def drift(self, ps_idx: np.ndarray) -> np.ndarray | float:
+        """(draws, players) mean offseason move from the QB the player had
+        last (carried forward: later seasons' QBs are unknown); 0 without it."""
+        if self.qb_drift is None or self.ps_qb_end is None:
+            return 0.0
+        q = self.ps_qb_end[ps_idx][None, :]
+        return self.qb_drift[:, None] * q + self.qb_drift_low[:, None] * np.minimum(q - QB_LOW_KNOT, 0.0)
+
+    def form_rest(self, ps_idx: np.ndarray, remaining: np.ndarray) -> np.ndarray | float:
+        """(draws, players) average form over the next `remaining` games of the
+        season (it decays by rho per game); 0 without form."""
+        if self.rho_form is None or self.form_dev is None:
+            return 0.0
+        k = np.arange(1, max(int(np.max(remaining, initial=0)), 1) + 1)
+        powers = self.rho_form[:, None] ** k[None]                        # (draws, K)
+        csum = np.cumsum(powers, axis=1)
+        n = np.clip(remaining, 1, len(k)).astype(int)
+        mean_decay = csum[:, n - 1] / n[None]                             # (draws, players)
+        return np.where(remaining[None] > 0, self.form_dev[:, ps_idx] * mean_decay, 0.0)
 
     def growth_effect(self, ps_idx: np.ndarray, career_year: np.ndarray) -> np.ndarray:
         """(draws, players) growth term at `career_year` for the players of
@@ -86,6 +120,13 @@ class PositionDraws:
             growth_pick=maybe("growth_pick"),
             career_year=getattr(d, "ps_career_year", None),
             ps_pick_z=None if getattr(d, "ps_career_year", None) is None else d.log_pick_z[d.ps_player],
+            rho_form=maybe("rho_form"),
+            form_dev=maybe("form_dev") if "form_dev" in posterior["posterior"] else (
+                None if "rho_form" not in posterior["posterior"] else form_dev_last(
+                    d, take("form_z"), take("rho_form"), take("sigma_form"), take("lam_form"))),
+            qb_drift=maybe("qb_drift"),
+            qb_drift_low=maybe("qb_drift_low"),
+            ps_qb_end=getattr(d, "ps_qb_end", None),
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
@@ -131,6 +172,7 @@ def project_latent(
         step = draws.tau[:, None] * np.sqrt(ahead) * rng.standard_normal(latent.shape)
         if vol is not None:
             step = step * vol[:, :, j]
+        step = step + np.where(ahead[None] > 0, draws.drift(ps_idx), 0.0)  # one drift per offseason, as in the fit
         latent = latent + draws.age_effect(age_next) - draws.age_effect(age_prev) + step
         prev = np.maximum(prev, season)
         out[:, :, j] = latent if shift is None else latent + shift[:, :, j]

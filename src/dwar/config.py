@@ -113,6 +113,12 @@ class ModelConfig(_Frozen):
     opportunity_years: int = 0  # >0: opportunity points only in career years 1..n
     rookie_round1: tuple[str, ...] = ()
     growth: tuple[str, ...] = ()
+    game_steps: tuple[str, ...] = ()  # talent also steps after every game (model/talent.py)
+    game_mode: str = "walk"           # "walk": lasting per-game steps; "form": decaying in-season form
+    qb_drift: tuple[str, ...] = ()    # offseason talent drift with the QB rating (model/talent.py)
+    form_rho: float | None = None      # hold the form decay rate fixed ("form" mode); None = estimate it
+    first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one
+    draws_by_position: dict[str, int] = {}  # sampler draws where a position needs more than `sampler.draws`
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)
