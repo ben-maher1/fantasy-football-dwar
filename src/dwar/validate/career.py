@@ -48,7 +48,14 @@ TEST_SEASONS = (2020, 2021, 2022)
 PERIODS = {
     "dev": (FIT_AS_OF, TEST_SEASONS),
     "holdout": (date(2023, 8, 1), (2023, 2024, 2025)),
+    # Earlier periods (2026-11-06, for the rookie bust check): same seven-
+    # season fit window as dev, shifted back. Before 2013 there are no snap
+    # counts, which only the injury-exit flag uses.
+    "p14": (date(2014, 8, 1), (2014, 2015, 2016)),
+    "p17": (date(2017, 8, 1), (2017, 2018, 2019)),
 }
+# First season of each period's fit and outcomes data (FIRST_SEASON otherwise).
+PERIOD_FIRST = {"p14": 2007, "p17": 2010}
 OUTCOMES_AS_OF = date(2026, 3, 1)  # after the 2025 season
 LAST_SEASON = 2025
 N_SETTINGS = 100                   # posterior draws of the settings used by the filter
@@ -148,6 +155,7 @@ def _tables(as_of: date):
 
 def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     fit_as_of, test_seasons = PERIODS[period]
+    first_season = PERIOD_FIRST.get(period, FIRST_SEASON)
     base = load_model_config()
     v = dict(VARIANTS[name])
     fade = v.pop("fade_qb", False)
@@ -155,7 +163,8 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     particles = v.pop("particles", PARTICLES)
     if "sampler" in v:
         v["sampler"] = base.sampler.model_copy(update=v["sampler"])
-    cfg = base.model_copy(update={"first_season": FIRST_SEASON, "positions": (POSITION,)} | v)
+    cfg = base.model_copy(update={"first_season": first_season, "positions": (POSITION,),
+                                  "first_season_by_position": {POSITION: first_season}} | v)
     out = root(name, period)
     out.mkdir(parents=True, exist_ok=True)
     fit_tables = _tables(fit_as_of)
@@ -186,7 +195,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
         settings = replace(settings, exit_rate=hurt.height / w.height, exit_points=hurt["fpts"].to_numpy())
         log.info("injury exits: %.1f%% of games, %.2f points on average", 100 * settings.exit_rate, hurt["fpts"].mean())
     full = build_model_data(
-        _tables(OUTCOMES_AS_OF), POSITION, FIRST_SEASON, min_plays=cfg.min_plays.get(POSITION, 0),
+        _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
     )
     if full.prospect_x_names != settings.prospect_names:
