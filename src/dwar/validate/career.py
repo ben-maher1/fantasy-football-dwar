@@ -117,6 +117,12 @@ VARIANTS: dict[str, dict] = {
     # early's step-through with 10x the particles: does the filter itself under-react?
     "early_m400": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
                    "fade_qb": True, "tau_early": (POSITION,), "particles": 400, "reuse_fit": {"dev": "early"}},
+    # ben, 2026-11-06: with the fixed test, hot young WRs still beat their
+    # forecasts (2023-25: +1.3 rest of season, +1.1 next). young adds lasting
+    # in-season steps for young players only (games' steps for everyone made
+    # later seasons too uncertain).
+    "young": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "young_steps": (POSITION,)},
     "cubic": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "age_curve": {POSITION: "cubic"}},
 }

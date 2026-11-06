@@ -32,6 +32,7 @@ from dwar.model.talent import (
     form_dev_last,
     is_hurdle,
     simulate_weeks,
+    young_cum_last,
 )
 
 log = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
         game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
         form_rho=cfg.form_rho, tau_early=p in cfg.tau_early,
+        young_steps=p in cfg.young_steps,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
@@ -101,6 +103,12 @@ def _compact(store: Path, d: ModelData) -> DataTree:
             for c in range(post.sizes["chain"])
         ])
         post["form_dev"] = (("chain", "draw", "form_player_season"), dev)
+    if "young_z" in post:
+        post = post.drop_vars("young_z").load()
+        z = zarr.open_array(store / "posterior" / "young_z", mode="r")
+        post["young_cum"] = (("chain", "draw", "form_player_season"), np.stack([
+            young_cum_last(d, np.asarray(z[c]), post["sigma_young"].values[c]) for c in range(post.sizes["chain"])
+        ]))
     stats = lazy["sample_stats"].to_dataset()
     # Per-draw stats only (divergences, energy, step size, ...): the store also
     # holds per-draw gradients and positions, several GB each here.

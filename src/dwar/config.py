@@ -119,6 +119,7 @@ class ModelConfig(_Frozen):
     form_rho: float | None = None      # hold the form decay rate fixed ("form" mode); None = estimate it
     tau_early: tuple[str, ...] = ()   # offseason talent step larger early in a career (model/talent.py lam_tau)
     injury_exits: tuple[str, ...] = ()  # leave injury-exit games out of the fit (features/exits.py)
+    young_steps: tuple[str, ...] = ()  # lasting per-game talent steps for young players ("form" mode)
     first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one
     draws_by_position: dict[str, int] = {}  # sampler draws where a position needs more than `sampler.draws`
 

@@ -101,3 +101,22 @@ def test_form_dev_last_matches_the_recursion():
                 e = sig[k] * np.sqrt(1 - rho[k] ** 2) * np.exp(lam[k] * np.exp(-cg[j] / EARLY_GAMES)) * z[k, o]
                 dev = rho[k] * dev + e
             assert got[k, p] == pytest.approx(dev)
+
+
+def test_young_cum_last_sums_steps_through_each_season_and_carries_over():
+    from types import SimpleNamespace
+
+    from dwar.model.talent import season_early, young_cum_last
+
+    lens = [3, 1, 5]  # player 0: seasons 0 and 1; player 1: season 2
+    obs_ps = np.repeat(np.arange(3), lens)
+    weeks = np.concatenate([np.arange(1, n + 1) for n in lens])
+    cg = np.array([0, 1, 2, 3, 0, 1, 2, 3, 4], float)
+    d = SimpleNamespace(obs_ps=obs_ps, obs_week=weeks, obs_career_games=cg, ps_player=np.array([0, 0, 1]),
+                        n_obs=len(obs_ps), n_ps=3)
+    z = np.array([[1.0, 2.0, 3.0, 1.0, 1.0, 1.0, 1.0]])  # one per non-first game, in game order
+    got = young_cum_last(d, z, np.array([0.5]))[0]
+    w = 0.5 * season_early(cg)
+    assert got[0] == pytest.approx(w[1] * 1 + w[2] * 2)
+    assert got[1] == pytest.approx(got[0] + w[3] * 3)  # carried into the next season
+    assert got[2] == pytest.approx(w[5:].sum())

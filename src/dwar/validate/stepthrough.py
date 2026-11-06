@@ -84,6 +84,7 @@ class Settings:
     fade: QBFade | None = None              # later seasons' QB fades toward average; None = carried forward
     beta3: np.ndarray | None = None         # cubic age term; None = quadratic
     lam_tau: np.ndarray | None = None       # early-career boost to the offseason step (tau_early); None = off
+    sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
     exit_points: np.ndarray | None = None   # points in past injury-exit games, drawn for simulated exits
 
@@ -150,6 +151,7 @@ class Settings:
             if fade_qb and d.ps_qb_end is not None else None,
             beta3=take("beta3") if "beta3" in post else None,
             lam_tau=take("lam_tau") if "lam_tau" in post else None,
+            sigma_young=take("sigma_young") if "sigma_young" in post else None,
         )
 
 
@@ -291,6 +293,8 @@ def _game_move(s: Settings, x: np.ndarray, dev: np.ndarray, draw: np.ndarray, fi
     early = np.exp(-career_games / EARLY_GAMES)
     if s.form:
         e = s.sigma_form[draw] * np.sqrt(1 - s.rho_form[draw] ** 2) * np.exp(s.lam_form[draw] * early) * rng.standard_normal(len(x))
+        if s.sigma_young is not None and not first_in_window:
+            x = x + s.sigma_young[draw] * season_early(career_games) * rng.standard_normal(len(x))
         return x, s.rho_form[draw] * dev + e
     if first_in_window:
         return x, dev

@@ -197,6 +197,25 @@ def game_step_design(d: ModelData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return order, first, early
 
 
+def young_cum_last(d: ModelData, young_z: np.ndarray, sigma_young: np.ndarray) -> np.ndarray:
+    """(draws, n_ps) the young-player steps (`young_steps`) summed over the
+    player's career through each player-season's last observed game, from
+    posterior draws (young_z (draws, moves), sigma_young (draws,))."""
+    order, first, _ = game_step_design(d)
+    young = season_early(d.obs_career_games[order])
+    moves = np.flatnonzero(~first)
+    starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
+    ps_sorted = d.obs_ps[order]
+    last = np.r_[ps_sorted[1:] != ps_sorted[:-1], True]  # last game of each player-season
+    out = np.zeros((len(sigma_young), d.n_ps))
+    for k in range(len(sigma_young)):
+        steps = np.zeros(d.n_obs)
+        steps[moves] = sigma_young[k] * young[moves] * young_z[k]
+        c = np.cumsum(steps)
+        out[k, ps_sorted[last]] = (c - c[starts])[last]
+    return out
+
+
 def form_dev_last(d: ModelData, form_z: np.ndarray, rho: np.ndarray, sigma_form: np.ndarray,
                   lam_form: np.ndarray) -> np.ndarray:
     """(draws, n_ps) the "form" mode's deviation after each player-season's
@@ -237,6 +256,7 @@ def build_talent_model(
     round1: bool = False, growth: bool = False, opportunity: bool = False,
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False,
+    young_steps: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -272,7 +292,12 @@ def build_talent_model(
     With `tau_early` (needs `d.ps_career_games`), the offseason step's
     scale is tau * exp(lam_tau * exp(-career games before the season /
     EARLY_SEASON_GAMES)): young players' talent can move more between
-    seasons, so their latest season counts more."""
+    seasons, so their latest season counts more.
+
+    With `young_steps` ("form" mode), young players' talent also takes a
+    lasting step after each game, sigma_young * exp(-career games /
+    EARLY_SEASON_GAMES), carried into later games and seasons like the
+    "walk" mode's steps; veterans' steps fade to about zero."""
     use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
     if use_opp:
         seen = np.isfinite(d.x)
@@ -448,6 +473,16 @@ def build_talent_model(
             dev = pt.zeros(d.n_obs)
             dev = pt.set_subtensor(dev[order], dev_sorted)
             latent_obs = latent_obs + dev
+            if young_steps:
+                _, first, _ = game_step_design(d)
+                young = season_early(d.obs_career_games[order])
+                sigma_young = pm.HalfNormal("sigma_young", GAME_STEP_PRIOR[latent_scale])
+                moves = np.flatnonzero(~first)
+                young_z = pm.Normal("young_z", 0.0, 1.0, shape=len(moves))
+                ysteps = pt.set_subtensor(pt.zeros(d.n_obs)[moves], sigma_young * young[moves] * young_z)
+                ysum = pt.cumsum(ysteps)
+                starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
+                latent_obs = latent_obs + pt.set_subtensor(pt.zeros(d.n_obs)[order], ysum - ysum[starts])
         loc_obs = link(latent_obs, likelihood)
 
         if is_hurdle(likelihood):
