@@ -197,6 +197,18 @@ def game_step_design(d: ModelData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return order, first, early
 
 
+def end_talent(likelihood: str, loc: np.ndarray, young_cum: np.ndarray, params: dict) -> np.ndarray:
+    """Expected points per game after each player-season's last game with
+    the young-player steps (`young_cum`) added to the season's location
+    `loc` on the latent scale; arrays broadcast (params per draw)."""
+    if scale_of(likelihood) == "sqrt":
+        loc = np.maximum(loc, 1e-12)
+        latent = loc + np.log(-np.expm1(-loc))  # inverse softplus
+    else:
+        latent = np.log(loc)
+    return talent_from_center(likelihood, link(latent + young_cum, likelihood, lib=np), params, np)
+
+
 def young_cum_last(d: ModelData, young_z: np.ndarray, sigma_young: np.ndarray) -> np.ndarray:
     """(draws, n_ps) the young-player steps (`young_steps`) summed over the
     player's career through each player-season's last observed game, from

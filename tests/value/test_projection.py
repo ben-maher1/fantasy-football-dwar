@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from dwar.model.talent import softplus
 from dwar.value.projection import PositionDraws, inverse_softplus, project_talent
@@ -162,3 +163,20 @@ def test_form_rest_averages_the_decay_over_remaining_games():
     got = d.form_rest(np.array([0, 1]), np.array([2, 0]))
     np.testing.assert_allclose(got[:, 0], 2.0 * (0.5 + 0.25) / 2)
     np.testing.assert_allclose(got[:, 1], 0.0)  # no games left: no form
+
+
+def test_young_steps_widen_young_players_future_seasons_more():
+    from dataclasses import replace
+
+    from dwar.model.talent import EARLY_SEASON_GAMES, season_early
+    from dwar.value.projection import GAMES_PER_SEASON
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    d = replace(draws(n, [10.0, 10.0]), sigma_young=np.full(n, 0.5), ps_career_games_end=np.array([0.0, 200.0]))
+    out = project_talent(d, np.array([0, 1]), np.array([2025, 2025]), np.array([22.0, 30.0]), np.arange(2025, 2027), rng)
+    np.testing.assert_allclose(out[:, :, 0], 10.0)  # the current season never moves
+    expect = 0.5 * np.sqrt((season_early(np.arange(GAMES_PER_SEASON)) ** 2).sum())
+    assert out[:, 0, 1].std() == pytest.approx(expect, rel=0.05)
+    assert out[:, 1, 1].std() < 0.01  # a veteran: steps faded out
+    assert EARLY_SEASON_GAMES == 34.0

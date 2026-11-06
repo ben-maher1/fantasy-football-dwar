@@ -29,6 +29,7 @@ from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
 from dwar.model.talent import (
     LIKELIHOOD_PARAMS,
     build_talent_model,
+    end_talent,
     form_dev_last,
     is_hurdle,
     simulate_weeks,
@@ -75,14 +76,22 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
             compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=s.tune, chains=s.chains, seed=cfg.seed,
             progress_bar=False, save_warmup=False, zarr_store=zarr_store.LocalStore(tmp),
         )
-        posterior = _compact(Path(tmp), d)
+        posterior = _compact(Path(tmp), d, cfg.likelihood_for(p))
     # The zarr store adds dict attributes (sampler settings) netCDF cannot save.
     for node in posterior.subtree:
         node.attrs = {k: v for k, v in node.attrs.items() if isinstance(v, (str, int, float, np.number))}
     return posterior
 
 
-def _compact(store: Path, d: ModelData) -> DataTree:
+def add_end_talent(post: xr.Dataset, likelihood: str, zero_value: float) -> None:
+    """With young steps, make `talent` each player-season's expected points
+    after its last game (season level plus the steps so far), what
+    replacement level and the value layer need; `loc` stays the season level."""
+    p = {n: post[n].values[..., None] for n in ("sigma", "nu", "h0", "h1")} | {"zero_value": zero_value}
+    post["talent"] = (post["talent"].dims, end_talent(likelihood, post["loc"].values, post["young_cum"].values, p))
+
+
+def _compact(store: Path, d: ModelData, likelihood: str) -> DataTree:
     """The posterior and sample stats, loaded into memory, without warmup.
     The "form" mode's per-game shocks (`form_z`, one per game per draw: about
     3.4 GB for WR 2013-2026) are replaced by what forecasting needs, the form
@@ -109,6 +118,7 @@ def _compact(store: Path, d: ModelData) -> DataTree:
         post["young_cum"] = (("chain", "draw", "form_player_season"), np.stack([
             young_cum_last(d, np.asarray(z[c]), post["sigma_young"].values[c]) for c in range(post.sizes["chain"])
         ]))
+        add_end_talent(post, likelihood, d.zero_week_mean)
     stats = lazy["sample_stats"].to_dataset()
     # Per-draw stats only (divergences, energy, step size, ...): the store also
     # holds per-draw gradients and positions, several GB each here.
