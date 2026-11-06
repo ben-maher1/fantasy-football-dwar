@@ -1,0 +1,12 @@
+# ben's league (2026-11-06): 1QB, 2 RB, 2 WR, 1 TE, 3 flex, half PPR.
+# 12 teams assumed (ben's other leagues are 12).
+name: 1qb_3flex_half_ppr
+scoring: half_ppr
+teams: 12
+lineup:
+  QB: 1
+  RB: 2
+  WR: 2
+  TE: 1
+  FLEX: 3        # RB/WR/TE
+discount: 0.85
