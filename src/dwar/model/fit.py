@@ -53,7 +53,8 @@ class FitResult:
 
 # Started at zero instead of a random point: with a log-scale latent, a
 # random age-curve start (beta2 near +-2 at age 41) puts exp() past overflow.
-UNJITTERED = ("beta1", "beta2", "beta3", "age_slope_pre", "age_slope_post")
+# age_shift is jittered: started at exactly 0, nutpie found no valid initial point.
+UNJITTERED = ("beta1", "beta2", "beta3", "age_slope_pre", "age_slope_post", "age_rise", "age_fall", "age_fall2")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:

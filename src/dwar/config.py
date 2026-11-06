@@ -105,7 +105,7 @@ class ModelConfig(_Frozen):
     situation_level: dict[str, tuple[str, ...]] = {}
     situation_range: dict[str, tuple[str, ...]] = {}
     # Per-position age curve (model/talent.py): quadratic (default) or hinge.
-    age_curve: dict[str, Literal["quadratic", "hinge", "cubic"]] = {}
+    age_curve: dict[str, Literal["quadratic", "hinge", "cubic", "plateau", "talent"]] = {}
     # Usage and early-career terms (model/talent.py), each a list of positions:
     # weekly opportunity points + per-player efficiency, a first-round step in
     # the rookie prior, and career-year growth scaled by draft capital.

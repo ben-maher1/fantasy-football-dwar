@@ -36,8 +36,10 @@ from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
 from dwar.features.qb_rating import QBFade, qb_fade
 from dwar.model.data import ModelData
 from dwar.model.talent import (
+    AGE_SHIFT_MAX,
     EARLY_GAMES,
     GROWTH_YEARS,
+    age_curve_effect,
     link,
     nonzero_prob,
     season_early,
@@ -87,6 +89,10 @@ class Settings:
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
     exit_points: np.ndarray | None = None   # points in past injury-exit games, drawn for simulated exits
+    age_curve: str = "quadratic"            # "plateau": beta1-3 are age_rise/fall/fall2; "talent": peak shifts
+    age_shift: np.ndarray | None = None     # talent curve: years of peak shift per SD of level
+    age_ref: np.ndarray | None = None       # talent curve: mean and SD of fit players' levels
+    age_ref_sd: np.ndarray | None = None
 
     def step_sd(self, draw: np.ndarray, career_games: float) -> np.ndarray:
         """Offseason step SD into a season starting after `career_games` games."""
@@ -130,11 +136,12 @@ class Settings:
         X = np.column_stack([np.ones(d.n_players), d.log_pick_z, d.undrafted])
         r1 = d.round1 if d.round1 is not None else np.zeros(d.n_players)
         g = len(GROWTH_YEARS)
+        plateau, talent = "age_rise" in post, "age_shift" in post
         return cls(
             likelihood=likelihood,
             alpha0=take("alpha0"), alpha_pick=take("alpha_pick"), alpha_undrafted=take("alpha_undrafted"),
             sigma_rookie=take("sigma_rookie"), mu_vet=take("mu_vet"), sigma_vet=take("sigma_vet"),
-            tau=take("tau"), beta1=take("beta1"), beta2=take("beta2"),
+            tau=take("tau"), beta1=take("age_rise" if plateau else "beta1"), beta2=take("age_fall" if plateau else "beta2"),
             sigma=take("sigma"), nu=take("nu"), h0=take("h0"), h1=take("h1"), zero_value=d.zero_week_mean,
             gamma=take("gamma", 0.0, d.prospect_x.shape[1]) if d.prospect_x.shape[1] else np.zeros((len(draws), 0)),
             alpha_round1=take("alpha_round1", 0.0),
@@ -149,15 +156,39 @@ class Settings:
             qb_drift_low=take("qb_drift_low") if "qb_drift" in post else None,
             fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
             if fade_qb and d.ps_qb_end is not None else None,
-            beta3=take("beta3") if "beta3" in post else None,
+            beta3=take("beta3") if "beta3" in post else (take("age_fall2") if plateau else None),
+            age_curve="plateau" if plateau else ("talent" if talent else "quadratic"),
+            age_shift=take("age_shift") if talent else None,
+            age_ref=take("age_ref") if talent else None,
+            age_ref_sd=take("age_ref_sd") if talent else None,
             lam_tau=take("lam_tau") if "lam_tau" in post else None,
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
         )
 
 
-def _age_effect(s: Settings, age_c: float) -> np.ndarray:
-    out = s.beta1 * age_c + s.beta2 * age_c**2
-    return out if s.beta3 is None else out + s.beta3 * age_c**3
+def _age_effect(s: Settings, age_c: float, draw: np.ndarray | None = None,
+                shift: np.ndarray | None = None) -> np.ndarray:
+    """Age effect per posterior draw, or per particle when `draw` is given
+    (and, for the talent-shifted curve, `shift` in years per particle)."""
+    b1, b2 = s.beta1, s.beta2
+    b3 = s.beta3
+    if draw is not None:
+        b1, b2 = b1[draw], b2[draw]
+        b3 = None if b3 is None else b3[draw]
+    if s.age_curve == "plateau":
+        return age_curve_effect(age_c, b1, b2, "plateau", b3)
+    a = age_c - shift if shift is not None else age_c
+    out = b1 * a + b2 * a**2
+    return out if b3 is None else out + b3 * a**3
+
+
+def _talent_shift(s: Settings, start: np.ndarray, age_c0: float, draw: np.ndarray) -> np.ndarray | None:
+    """Talent curve: each particle's peak shift from its first-season level."""
+    if s.age_curve != "talent":
+        return None
+    adj = start - (s.beta1[draw] * age_c0 + s.beta2[draw] * age_c0**2)
+    z = (adj - s.age_ref[draw]) / s.age_ref_sd[draw]
+    return np.clip(s.age_shift[draw] * z, -AGE_SHIFT_MAX, AGE_SHIFT_MAX)
 
 
 def _growth(s: Settings, cy: int, pick_z: float) -> np.ndarray:
@@ -241,7 +272,8 @@ class Filter:
         start = mean[self.draw] + sd[self.draw] * rng.standard_normal(len(self.draw))
         # x: latent talent before the season's age and growth effects; the
         # first season's latent is `start` (the model's convention).
-        self.x = start - _age_effect(s, pl_.age_c[0])[self.draw]
+        self.shift = _talent_shift(s, start, pl_.age_c[0], self.draw)
+        self.x = start - _age_effect(s, pl_.age_c[0], self.draw, self.shift)
         self.dev = np.zeros(len(self.draw))  # in-season form ("form" mode); resets each season
         self.logw = np.zeros(len(self.draw))
 
@@ -257,7 +289,7 @@ class Filter:
 
     def season_shift(self, j: int) -> np.ndarray:
         p = self.p
-        return (_age_effect(self.s, p.age_c[j]) + _growth(self.s, p.career_year[j], p.pick_z))[self.draw]
+        return _age_effect(self.s, p.age_c[j], self.draw, self.shift) + _growth(self.s, p.career_year[j], p.pick_z)[self.draw]
 
     def update(self, j: int, y: float) -> None:
         self.logw = self.logw + _loglik(self.s, self.x + self.dev + self.season_shift(j), y, self.draw)
@@ -271,11 +303,13 @@ class Filter:
             idx = (cum[:, None, :] < u[:, :, None]).sum(axis=2)
             idx = np.minimum(idx, self.m - 1) + np.arange(self.s.n)[:, None] * self.m
             self.x, self.dev = self.x[idx.ravel()], self.dev[idx.ravel()]
+            if self.shift is not None:
+                self.shift = self.shift[idx.ravel()]
             self.logw = np.zeros(len(self.x))
         else:
             self.logw = np.log(w.ravel())
 
-    def sample(self, r: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def sample(self, r: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
         """`r` particles drawn by weight within draw groups, cycling over draws."""
         w = np.exp(self.logw.reshape(self.s.n, self.m))
         w = w / w.sum(axis=1, keepdims=True)
@@ -283,7 +317,8 @@ class Filter:
         cum = np.cumsum(w, axis=1)[groups]
         pick = np.minimum((cum < self.rng.random(r)[:, None]).sum(axis=1), self.m - 1)
         idx = groups * self.m + pick
-        return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx]
+        shift = None if self.shift is None else self.shift[idx]
+        return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift
 
 
 def _game_move(s: Settings, x: np.ndarray, dev: np.ndarray, draw: np.ndarray, first_in_window: bool,
@@ -307,7 +342,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
     season j (after `done` games), then each later season with games. Returns,
     per stretch, (r, games) weekly points or None when the stretch has no games."""
     s, p = f.s, f.p
-    x, dev, draw = f.sample(r)
+    x, dev, draw, ashift = f.sample(r)
     params = {"sigma": s.sigma[draw][:, None], "nu": s.nu[draw][:, None], "h0": s.h0[draw][:, None],
               "h1": s.h1[draw][:, None], "zero_value": s.zero_value}
     out: list[np.ndarray | None] = []
@@ -329,7 +364,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
         prev_season = season
         age_c = p.age_c[j] + h
         cy = p.career_year[j] + h if p.career_year[j] > 0 else 0
-        shift = _age_effect(s, age_c)[draw] + _growth(s, cy, p.pick_z)[draw]
+        shift = _age_effect(s, age_c, draw, ashift) + _growth(s, cy, p.pick_z)[draw]
         lat = np.empty((r, n_games))
         for k in range(n_games):
             x, dev = _game_move(s, x, dev, draw, h == 0 and k == 0 and done == 0 and j == 0, cg, rng)

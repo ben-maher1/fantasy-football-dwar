@@ -59,6 +59,8 @@ from dwar.model.data import ModelData
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
 AGE_KNOT = 30.0  # hinge age curve: where the slope may change
+PLATEAU = (24.0, 28.0)  # plateau age curve: rises to the first age, flat to the second, then falls
+AGE_SHIFT_MAX = 5.0  # talent-shifted age curve: the peak moves at most this many years
 KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
 SQRT_PIVOT = 3.0  # sqrt-scale location (about 9 ppg) at which the zero-week log-odds are h0
 
@@ -160,6 +162,16 @@ def _shrunk_coefs(name: str, dim: str, sd: float) -> pt.TensorVariable:
     return pm.Normal(name, 0.0, sd, dims=dim)
 
 
+def level_reference(d: ModelData) -> tuple[float, float]:
+    """Mean and SD across players of first in-window season mean sqrt points:
+    the talent-shifted age curve's reference level (shift 0) and unit."""
+    first = d.ps_is_first[d.obs_ps]
+    per = np.bincount(d.ps_player[d.obs_ps[first]], np.sqrt(np.maximum(d.y[first], 0.0)), d.n_players)
+    n = np.bincount(d.ps_player[d.obs_ps[first]], minlength=d.n_players)
+    lv = per[n > 0] / n[n > 0]
+    return float(lv.mean()), float(lv.std())
+
+
 def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic", beta3=0.0):
     """Age effect from age minus AGE_CENTER (26); works on numpy or tensors.
     "cubic" adds beta3 * a^3, so the peak and the later decline can differ
@@ -167,6 +179,12 @@ def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic", beta3=0.0):
     if curve == "hinge":
         a = age_c - (AGE_KNOT - 26.0)
         return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
+    if curve == "plateau":
+        # beta1: yearly rise before PLATEAU[0]; beta2, beta3: linear and
+        # squared fall after PLATEAU[1]; flat between.
+        lo, hi = age_c - (PLATEAU[0] - 26.0), age_c - (PLATEAU[1] - 26.0)
+        before, after = (lo - abs(lo)) / 2, (hi + abs(hi)) / 2
+        return beta1 * before + beta2 * after + beta3 * after**2
     out = beta1 * age_c + beta2 * age_c**2
     return out + beta3 * age_c**3 if curve == "cubic" else out
 
@@ -357,12 +375,18 @@ def build_talent_model(
         if age_curve == "hinge":
             beta1 = pm.Normal("age_slope_pre", 0.0, pr["beta1"])
             beta2 = pm.Normal("age_slope_post", 0.0, pr["beta1"])
+            beta3 = 0.0
+        elif age_curve == "plateau":
+            beta1 = pm.Normal("age_rise", 0.0, pr["beta1"])
+            beta2 = pm.Normal("age_fall", 0.0, pr["beta1"])
+            beta3 = pm.Normal("age_fall2", 0.0, pr["beta2"])
         else:
             beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
             beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
-        # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
-        beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
-        age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve, beta3)
+            # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
+            beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
+        if age_curve != "talent":
+            age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve, beta3)
 
         # First-season latent talent per player. Rookies are non-centered
         # (little data each); veterans are centered, because their long
@@ -379,6 +403,25 @@ def build_talent_model(
         if len(vets):
             vet_start = pm.Normal("vet_start", mu_vet, sigma_vet, shape=len(vets))
             start = pt.set_subtensor(start[vets], vet_start)
+
+        if age_curve == "talent":
+            # The quadratic's peak moves with the player's level: his first
+            # season's latent less the (unshifted) curve at that age,
+            # standardized across players. age_shift is years per SD.
+            first = np.flatnonzero(d.ps_is_first)
+            a0 = np.zeros(d.n_players)
+            a0[d.ps_player[first]] = d.ps_age_c[first]
+            adj = start - (beta1 * a0 + beta2 * a0**2)
+            # Fixed reference level and SD (from each player's first-season
+            # sqrt points) rather than the parameters' own mean and SD, which
+            # tied every player's start together and broke initialization.
+            ref, ref_sd = level_reference(d)
+            adj_mean = pm.Deterministic("age_ref", pt.as_tensor(ref))
+            adj_sd = pm.Deterministic("age_ref_sd", pt.as_tensor(ref_sd))
+            k_age = pm.Normal("age_shift", 0.0, 1.0)
+            shift = pt.clip(k_age * (adj - adj_mean) / adj_sd, -AGE_SHIFT_MAX, AGE_SHIFT_MAX)
+            a = d.ps_age_c - shift[d.ps_player]
+            age_effect = beta1 * a + beta2 * a**2
 
         # Random walk across a player's seasons from standardized steps.
         tau = pm.HalfNormal("tau", pr["tau"])

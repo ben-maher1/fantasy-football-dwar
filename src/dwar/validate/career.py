@@ -123,6 +123,15 @@ VARIANTS: dict[str, dict] = {
     # later seasons too uncertain).
     "young": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "young_steps": (POSITION,)},
+    # Age-curve shapes, 2026-11-06, vs "young" on dev: plateau (rise to 24,
+    # flat to 28, then ~-0.16 sqrt/yr) worse (discounted log -0.011, MAE
+    # -0.040; veterans 2-3 seasons out worst). Talent-shifted peak: age_shift
+    # -1.4 +- 0.6 years per SD of level (better WRs peak earlier, not later),
+    # forecasts tie (log -0.003). Neither kept.
+    "plateau": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                "fade_qb": True, "young_steps": (POSITION,), "age_curve": {POSITION: "plateau"}},
+    "agetalent": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                  "fade_qb": True, "young_steps": (POSITION,), "age_curve": {POSITION: "talent"}},
     "cubic": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "age_curve": {POSITION: "cubic"}},
 }
