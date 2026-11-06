@@ -285,7 +285,7 @@ def build_talent_model(
     d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic",
     round1: bool = False, growth: bool = False, opportunity: bool = False,
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
-    qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False,
+    qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
@@ -436,6 +436,12 @@ def build_talent_model(
             if tau_early and d.ps_career_games is not None:
                 lam_tau = pm.Normal("lam_tau", 0.0, 1.0)
                 scale = scale * pt.exp(lam_tau * season_early(d.ps_career_games[later]))
+            if tau_y3 and d.ps_career_year is not None and d.round1 is not None:
+                # First-round picks' step into career year 3: the year they
+                # most often take over a role or lose it (rookie bust check).
+                y3 = ((d.ps_career_year[later] == 3) & (d.round1[d.ps_player[later]] > 0)).astype(float)
+                lam_y3 = pm.Normal("lam_y3", 0.0, 1.0)
+                scale = scale * pt.exp(lam_y3 * y3)
             move = scale * step_z
             if qb_drift and d.ps_qb_end is not None:
                 # Rows are sorted by player then season, so a later season's

@@ -86,6 +86,7 @@ class Settings:
     fade: QBFade | None = None              # later seasons' QB fades toward average; None = carried forward
     beta3: np.ndarray | None = None         # cubic age term; None = quadratic
     lam_tau: np.ndarray | None = None       # early-career boost to the offseason step (tau_early); None = off
+    lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
     exit_points: np.ndarray | None = None   # points in past injury-exit games, drawn for simulated exits
@@ -94,11 +95,15 @@ class Settings:
     age_ref: np.ndarray | None = None       # talent curve: mean and SD of fit players' levels
     age_ref_sd: np.ndarray | None = None
 
-    def step_sd(self, draw: np.ndarray, career_games: float) -> np.ndarray:
-        """Offseason step SD into a season starting after `career_games` games."""
-        if self.lam_tau is None:
-            return self.tau[draw]
-        return self.tau[draw] * np.exp(self.lam_tau[draw] * season_early(career_games))
+    def step_sd(self, draw: np.ndarray, career_games: float, career_year: int = 0, round1: float = 0.0) -> np.ndarray:
+        """Offseason step SD into a season starting after `career_games` games
+        (career year `career_year` of the new season; 0 = unknown)."""
+        out = self.tau[draw]
+        if self.lam_tau is not None:
+            out = out * np.exp(self.lam_tau[draw] * season_early(career_games))
+        if self.lam_y3 is not None and career_year == 3 and round1 > 0:
+            out = out * np.exp(self.lam_y3[draw])
+        return out
 
     def drift(self, q: float, draw: np.ndarray, offseason: int = 1) -> np.ndarray | float:
         """Mean offseason move given the QB rating `q` at the end of the season
@@ -162,6 +167,7 @@ class Settings:
             age_ref=take("age_ref") if talent else None,
             age_ref_sd=take("age_ref_sd") if talent else None,
             lam_tau=take("lam_tau") if "lam_tau" in post else None,
+            lam_y3=take("lam_y3") if "lam_y3" in post else None,
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
         )
 
@@ -277,11 +283,11 @@ class Filter:
         self.dev = np.zeros(len(self.draw))  # in-season form ("form" mode); resets each season
         self.logw = np.zeros(len(self.draw))
 
-    def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0) -> None:
+    def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0, career_year: int = 0) -> None:
         """Into a new season; `q` is the QB rating at the end of the season
         before, `career_games` the games played before the new one."""
         self.x = (self.x + self.s.drift(q, self.draw)
-                  + self.s.step_sd(self.draw, career_games) * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
+                  + self.s.step_sd(self.draw, career_games, career_year, self.p.round1) * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
         self.dev = np.zeros(len(self.x))
 
     def before_game(self, first_in_window: bool, career_games: float) -> None:
@@ -356,7 +362,8 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
         if h > 0 and n_games:
             # One drift per step between seasons played, as in the fit.
             # The QB behind this drift is season (j + h - 1)'s: h - 1 seasons on.
-            x = x + s.drift(q, draw, h) + s.step_sd(draw, cg) * np.sqrt(season - prev_season) * rng.standard_normal(r)
+            cy_new = p.career_year[j] + h if p.career_year[j] > 0 else 0
+            x = x + s.drift(q, draw, h) + s.step_sd(draw, cg, cy_new, p.round1) * np.sqrt(season - prev_season) * rng.standard_normal(r)
             dev = np.zeros(r)
         if not n_games:
             out.append(None)
@@ -397,7 +404,8 @@ def step_through(
         started = False  # the first game used takes no step (the fit's convention)
         for j, season in enumerate(p.seasons):
             if j > 0:
-                f.offseason(p.gaps[j], p.qb_before(j, 0), float(p.career_games[j][0]) if len(p.career_games[j]) else 0.0)
+                f.offseason(p.gaps[j], p.qb_before(j, 0), float(p.career_games[j][0]) if len(p.career_games[j]) else 0.0,
+                            p.career_year[j])
             g = p.games[j]
             for k in range(len(g) + 1):
                 if season in test_seasons and k < len(g):

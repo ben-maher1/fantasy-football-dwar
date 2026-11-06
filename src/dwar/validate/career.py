@@ -135,6 +135,12 @@ VARIANTS: dict[str, dict] = {
     # -0.040; veterans 2-3 seasons out worst). Talent-shifted peak: age_shift
     # -1.4 +- 0.6 years per SD of level (better WRs peak earlier, not later),
     # forecasts tie (log -0.003). Neither kept.
+    # y3 (2026-11-06): first-round picks' bigger step into career year 3, vs
+    # young on all four periods: ties (discounted log +0.004 dev, -0.001
+    # holdout, +0.003 p14, -0.001 p17); slow-starting 1st-rounders' year-3
+    # tails barely moved (PIT<.10 23% -> 23%). Not kept.
+    "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+           "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     "plateau": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
                 "fade_qb": True, "young_steps": (POSITION,), "age_curve": {POSITION: "plateau"}},
     "agetalent": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
