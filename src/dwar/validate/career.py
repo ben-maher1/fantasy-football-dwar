@@ -146,6 +146,12 @@ VARIANTS: dict[str, dict] = {
            "fade_qb": True, "young_steps": (POSITION,), "season_rho": (POSITION,)},
     "ar2": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
             "fade_qb": True, "young_steps": (POSITION,), "season_rho": (POSITION,), "season_rho_mean": "vet"},
+    # Lasting level (random walk) plus a fading per-season bump (AR(1),
+    # rho_bump), vs young5 and ar2 (ben, 2026-11-07: ar2 pulled stars to
+    # the population mean; this lets a big year fade without pulling the
+    # player's lasting level down).
+    "bump": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+             "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,)},
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before

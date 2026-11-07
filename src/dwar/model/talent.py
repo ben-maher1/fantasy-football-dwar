@@ -277,6 +277,19 @@ def growth_design(career_year: np.ndarray, log_pick_z: np.ndarray) -> tuple[np.n
     return ind, ind * np.asarray(log_pick_z)[:, None]
 
 
+def bump_pairs(d: ModelData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(row, earlier-or-same row of the same player, seasons between) for
+    every such pair of player-seasons (season_bump)."""
+    seasons = d.ps_keys["season"].to_numpy().astype(float)
+    dst, src = [], []
+    for i in range(d.n_ps):
+        j = np.arange(d.ps_start[i], i + 1)
+        dst.append(np.full(len(j), i))
+        src.append(j)
+    dst, src = np.concatenate(dst), np.concatenate(src)
+    return dst, src, seasons[dst] - seasons[src]
+
+
 def has_opportunity(d: ModelData) -> bool:
     return d.x is not None and bool(np.isfinite(d.x).any())
 
@@ -287,6 +300,7 @@ def build_talent_model(
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
+    season_bump: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -472,6 +486,21 @@ def build_talent_model(
             level = csum - csum[d.ps_start] + steps[d.ps_start]
 
         latent = level + age_effect
+        if season_bump:
+            # A season's passing bump on top of the lasting level: an AR(1)
+            # across a player's seasons, bump_s = rho^gap bump_prev + e_s,
+            # stationary SD sigma_bump (so the first season's bump has SD
+            # sigma_bump too). Summed as rho^(k_s - k_j) e_j over pairs.
+            rho_b = pm.Beta("rho_bump", 2.0, 2.0)
+            sigma_b = pm.HalfNormal("sigma_bump", pr["tau"])
+            bump_z = pm.Normal("bump_z", 0.0, 1.0, shape=d.n_ps)
+            dst, src, lag = bump_pairs(d)
+            first = d.ps_start == np.arange(d.n_ps)
+            gap = np.where(first, 0.0, np.maximum(d.ps_gap, 1.0))
+            innov = pt.where(first, 1.0, pt.sqrt(1.0 - rho_b ** (2.0 * gap)))
+            e = sigma_b * innov * bump_z
+            bump = pt.inc_subtensor(pt.zeros(d.n_ps)[dst], rho_b**lag * e[src])
+            latent = latent + bump
         if d.season_x.shape[1]:
             eta = _shrunk_coefs("eta", "season_cov", pr["covariate"])
             latent = latent + pt.dot(d.season_x, eta)

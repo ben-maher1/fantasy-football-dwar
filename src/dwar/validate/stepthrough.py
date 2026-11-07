@@ -88,6 +88,8 @@ class Settings:
     lam_tau: np.ndarray | None = None       # early-career boost to the offseason step (tau_early); None = off
     rho_season: np.ndarray | None = None    # pull toward level_mean between seasons (season_rho); None = random walk
     level_mean: np.ndarray | None = None
+    rho_bump: np.ndarray | None = None      # fading season bump (season_bump): AR(1) rate and stationary SD
+    sigma_bump: np.ndarray | None = None
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
@@ -114,6 +116,19 @@ class Settings:
             return x
         m, r = self.level_mean[draw], self.rho_season[draw] ** max(years, 0.0)
         return m + r * (x - m)
+
+    def bump_start(self, draw: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+        """A first season's bump (zero without season_bump)."""
+        if self.rho_bump is None:
+            return np.zeros(len(draw))
+        return self.sigma_bump[draw] * rng.standard_normal(len(draw))
+
+    def bump_next(self, b: np.ndarray, draw: np.ndarray, years: float, rng: np.random.Generator) -> np.ndarray:
+        """The bump `years` seasons on: faded by rho_bump^years plus a fresh part."""
+        if self.rho_bump is None:
+            return b
+        r = self.rho_bump[draw] ** max(years, 1.0)
+        return r * b + self.sigma_bump[draw] * np.sqrt(1.0 - r**2) * rng.standard_normal(len(b))
 
     def drift(self, q: float, draw: np.ndarray, offseason: int = 1) -> np.ndarray | float:
         """Mean offseason move given the QB rating `q` at the end of the season
@@ -181,6 +196,8 @@ class Settings:
             rho_season=take("rho_season") if "rho_season" in post else None,
             level_mean=take("level_mean") if "rho_season" in post else None,
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
+            rho_bump=take("rho_bump") if "rho_bump" in post else None,
+            sigma_bump=take("sigma_bump") if "rho_bump" in post else None,
         )
 
 
@@ -293,6 +310,7 @@ class Filter:
         self.shift = _talent_shift(s, start, pl_.age_c[0], self.draw)
         self.x = start - _age_effect(s, pl_.age_c[0], self.draw, self.shift)
         self.dev = np.zeros(len(self.draw))  # in-season form ("form" mode); resets each season
+        self.bump = s.bump_start(self.draw, rng)  # this season's passing bump (season_bump)
         self.logw = np.zeros(len(self.draw))
 
     def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0, career_year: int = 0) -> None:
@@ -301,6 +319,7 @@ class Filter:
         self.x = (self.s.revert(self.x, self.draw, max(gap, 1.0)) + self.s.drift(q, self.draw)
                   + self.s.step_sd(self.draw, career_games, career_year, self.p.round1) * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
         self.dev = np.zeros(len(self.x))
+        self.bump = self.s.bump_next(self.bump, self.draw, gap, self.rng)
 
     def before_game(self, first_in_window: bool, career_games: float) -> None:
         self.x, self.dev = _game_move(self.s, self.x, self.dev, self.draw, first_in_window, career_games, self.rng)
@@ -310,7 +329,7 @@ class Filter:
         return _age_effect(self.s, p.age_c[j], self.draw, self.shift) + _growth(self.s, p.career_year[j], p.pick_z)[self.draw]
 
     def update(self, j: int, y: float) -> None:
-        self.logw = self.logw + _loglik(self.s, self.x + self.dev + self.season_shift(j), y, self.draw)
+        self.logw = self.logw + _loglik(self.s, self.x + self.bump + self.dev + self.season_shift(j), y, self.draw)
         w = self.logw.reshape(self.s.n, self.m)
         w = np.exp(w - w.max(axis=1, keepdims=True))
         w = w / w.sum(axis=1, keepdims=True)
@@ -320,14 +339,14 @@ class Filter:
             cum = np.cumsum(w, axis=1)
             idx = (cum[:, None, :] < u[:, :, None]).sum(axis=2)
             idx = np.minimum(idx, self.m - 1) + np.arange(self.s.n)[:, None] * self.m
-            self.x, self.dev = self.x[idx.ravel()], self.dev[idx.ravel()]
+            self.x, self.dev, self.bump = self.x[idx.ravel()], self.dev[idx.ravel()], self.bump[idx.ravel()]
             if self.shift is not None:
                 self.shift = self.shift[idx.ravel()]
             self.logw = np.zeros(len(self.x))
         else:
             self.logw = np.log(w.ravel())
 
-    def sample(self, r: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    def sample(self, r: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
         """`r` particles drawn by weight within draw groups, cycling over draws."""
         w = np.exp(self.logw.reshape(self.s.n, self.m))
         w = w / w.sum(axis=1, keepdims=True)
@@ -336,7 +355,7 @@ class Filter:
         pick = np.minimum((cum < self.rng.random(r)[:, None]).sum(axis=1), self.m - 1)
         idx = groups * self.m + pick
         shift = None if self.shift is None else self.shift[idx]
-        return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift
+        return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift, self.bump[idx].copy()
 
 
 def _game_move(s: Settings, x: np.ndarray, dev: np.ndarray, draw: np.ndarray, first_in_window: bool,
@@ -360,7 +379,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
     season j (after `done` games), then each later season with games. Returns,
     per stretch, (r, games) weekly points or None when the stretch has no games."""
     s, p = f.s, f.p
-    x, dev, draw, ashift = f.sample(r)
+    x, dev, draw, ashift, bump = f.sample(r)
     params = {"sigma": s.sigma[draw][:, None], "nu": s.nu[draw][:, None], "h0": s.h0[draw][:, None],
               "h1": s.h1[draw][:, None], "zero_value": s.zero_value}
     out: list[np.ndarray | None] = []
@@ -377,6 +396,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
             cy_new = p.career_year[j] + h if p.career_year[j] > 0 else 0
             x = s.revert(x, draw, season - prev_season) + s.drift(q, draw, h) + s.step_sd(draw, cg, cy_new, p.round1) * np.sqrt(season - prev_season) * rng.standard_normal(r)
             dev = np.zeros(r)
+            bump = s.bump_next(bump, draw, season - prev_season, rng)
         if not n_games:
             out.append(None)
             continue
@@ -387,7 +407,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
         lat = np.empty((r, n_games))
         for k in range(n_games):
             x, dev = _game_move(s, x, dev, draw, h == 0 and k == 0 and done == 0 and j == 0, cg, rng)
-            lat[:, k] = x + dev + shift
+            lat[:, k] = x + bump + dev + shift
             cg += 1
         center = link(lat, s.likelihood, lib=np)
         sim = simulate_weeks(s.likelihood, center, params, rng)
