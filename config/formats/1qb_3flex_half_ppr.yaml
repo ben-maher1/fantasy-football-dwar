@@ -9,7 +9,7 @@ lineup:
   WR: 2
   TE: 1
   FLEX: 3        # RB/WR/TE
-discount: 0.85
+discount: 0.80   # ben, 2026-11-07 (with a 5-season horizon)
 # Roster (ben, 2026-11-06/07): 16 bench spots (+3 IR, +5 taxi, not counted).
 # Typical split of the 25 active spots per team, confirmed by ben.
 roster:

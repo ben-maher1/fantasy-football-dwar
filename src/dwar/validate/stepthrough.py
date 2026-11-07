@@ -47,8 +47,8 @@ from dwar.model.talent import (
 )
 from dwar.validate.forecast import kde_log_density, pit
 
-HORIZON = 3  # full seasons scored after the current one (DWAR's horizon_seasons)
-DISCOUNT = 0.85
+HORIZON = 5  # full seasons scored after the current one (DWAR horizon_seasons; was 3 before 2026-11-07)
+DISCOUNT = 0.80
 
 
 @dataclass(frozen=True)
