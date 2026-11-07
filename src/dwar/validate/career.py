@@ -139,6 +139,13 @@ VARIANTS: dict[str, dict] = {
     # young on all four periods: ties (discounted log +0.004 dev, -0.001
     # holdout, +0.003 p14, -0.001 p17); slow-starting 1st-rounders' year-3
     # tails barely moved (PIT<.10 23% -> 23%). Not kept.
+    # ar (2026-11-07): talent pulled toward average between seasons
+    # (season_rho), vs young5. Diagnosis: forecasts too spread, slope of
+    # actual on forecast 0.85 one season out to 0.69 five out.
+    "ar": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+           "fade_qb": True, "young_steps": (POSITION,), "season_rho": (POSITION,)},
+    "ar2": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+            "fade_qb": True, "young_steps": (POSITION,), "season_rho": (POSITION,), "season_rho_mean": "vet"},
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before

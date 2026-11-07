@@ -286,7 +286,7 @@ def build_talent_model(
     round1: bool = False, growth: bool = False, opportunity: bool = False,
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
-    young_steps: bool = False,
+    young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -451,8 +451,25 @@ def build_talent_model(
                 b_low = pm.Normal("qb_drift_low", 0.0, pr["covariate"])
                 move = move + b_qb * q + b_low * np.minimum(q - QB_LOW_KNOT, 0.0)
             steps = pt.set_subtensor(steps[later], move)
-        csum = pt.cumsum(steps)
-        level = csum - csum[d.ps_start] + steps[d.ps_start]
+        if season_rho:
+            # Pull toward average between seasons: level_k = m + rho^k (L0 - m)
+            # + sum_j rho^(k - k_j) move_j, k = seasons since the player's first
+            # (actual years, so gaps decay too). As a scaled cumulative sum.
+            # rho = 1 is the random walk.
+            rho = pm.Beta("rho_season", 4.0, 1.0)
+            # "vet": the veterans' starting mean (mu_vet); a free mean traded
+            # off with the age slope and mixed poorly (ar, 2026-11-07).
+            m = pm.Deterministic("level_mean", mu_vet) if season_rho_mean == "vet" else pm.Normal("level_mean", *pr["mu_vet"])
+            seasons = d.ps_keys["season"].to_numpy().astype(float)
+            k = seasons - seasons[d.ps_start]
+            first = d.ps_start == np.arange(d.n_ps)
+            moves = pt.where(first, 0.0, steps)
+            c = pt.cumsum(moves * rho ** (-k))
+            c = c - c[d.ps_start]
+            level = m + rho**k * (steps[d.ps_start] - m) + rho**k * c
+        else:
+            csum = pt.cumsum(steps)
+            level = csum - csum[d.ps_start] + steps[d.ps_start]
 
         latent = level + age_effect
         if d.season_x.shape[1]:

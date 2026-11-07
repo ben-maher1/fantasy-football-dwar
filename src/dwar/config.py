@@ -137,6 +137,8 @@ class ModelConfig(_Frozen):
     game_mode: str = "walk"           # "walk": lasting per-game steps; "form": decaying in-season form
     qb_drift: tuple[str, ...] = ()    # offseason talent drift with the QB rating (model/talent.py)
     form_rho: float | None = None      # hold the form decay rate fixed ("form" mode); None = estimate it
+    season_rho: tuple[str, ...] = ()  # talent pulled toward average between seasons (rho_season; random walk otherwise)
+    season_rho_mean: Literal["free", "vet"] = "free"  # what season_rho pulls toward
     tau_y3: tuple[str, ...] = ()      # first-round picks' larger offseason step into career year 3 (lam_y3)
     tau_early: tuple[str, ...] = ()   # offseason talent step larger early in a career (model/talent.py lam_tau)
     injury_exits: tuple[str, ...] = ()  # leave injury-exit games out of the fit (features/exits.py)

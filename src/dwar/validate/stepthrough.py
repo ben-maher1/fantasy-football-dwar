@@ -86,6 +86,8 @@ class Settings:
     fade: QBFade | None = None              # later seasons' QB fades toward average; None = carried forward
     beta3: np.ndarray | None = None         # cubic age term; None = quadratic
     lam_tau: np.ndarray | None = None       # early-career boost to the offseason step (tau_early); None = off
+    rho_season: np.ndarray | None = None    # pull toward level_mean between seasons (season_rho); None = random walk
+    level_mean: np.ndarray | None = None
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
@@ -104,6 +106,14 @@ class Settings:
         if self.lam_y3 is not None and career_year == 3 and round1 > 0:
             out = out * np.exp(self.lam_y3[draw])
         return out
+
+    def revert(self, x: np.ndarray, draw: np.ndarray, years: float) -> np.ndarray:
+        """Level `years` seasons on before its new step: pulled toward
+        level_mean by rho_season^years (unchanged for a random walk)."""
+        if self.rho_season is None:
+            return x
+        m, r = self.level_mean[draw], self.rho_season[draw] ** max(years, 0.0)
+        return m + r * (x - m)
 
     def drift(self, q: float, draw: np.ndarray, offseason: int = 1) -> np.ndarray | float:
         """Mean offseason move given the QB rating `q` at the end of the season
@@ -168,6 +178,8 @@ class Settings:
             age_ref_sd=take("age_ref_sd") if talent else None,
             lam_tau=take("lam_tau") if "lam_tau" in post else None,
             lam_y3=take("lam_y3") if "lam_y3" in post else None,
+            rho_season=take("rho_season") if "rho_season" in post else None,
+            level_mean=take("level_mean") if "rho_season" in post else None,
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
         )
 
@@ -286,7 +298,7 @@ class Filter:
     def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0, career_year: int = 0) -> None:
         """Into a new season; `q` is the QB rating at the end of the season
         before, `career_games` the games played before the new one."""
-        self.x = (self.x + self.s.drift(q, self.draw)
+        self.x = (self.s.revert(self.x, self.draw, max(gap, 1.0)) + self.s.drift(q, self.draw)
                   + self.s.step_sd(self.draw, career_games, career_year, self.p.round1) * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
         self.dev = np.zeros(len(self.x))
 
@@ -363,7 +375,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
             # One drift per step between seasons played, as in the fit.
             # The QB behind this drift is season (j + h - 1)'s: h - 1 seasons on.
             cy_new = p.career_year[j] + h if p.career_year[j] > 0 else 0
-            x = x + s.drift(q, draw, h) + s.step_sd(draw, cg, cy_new, p.round1) * np.sqrt(season - prev_season) * rng.standard_normal(r)
+            x = s.revert(x, draw, season - prev_season) + s.drift(q, draw, h) + s.step_sd(draw, cg, cy_new, p.round1) * np.sqrt(season - prev_season) * rng.standard_normal(r)
             dev = np.zeros(r)
         if not n_games:
             out.append(None)

@@ -66,6 +66,8 @@ class PositionDraws:
     lam_tau: np.ndarray | None = None      # (draws,) early-career boost to the offseason step; None = off
     ps_career_games_end: np.ndarray | None = None  # (player_seasons,) career games after each season
     sigma_young: np.ndarray | None = None  # (draws,) young players' lasting per-game step; None = off
+    rho_season: np.ndarray | None = None   # (draws,) pull toward level_mean between seasons; None = random walk
+    level_mean: np.ndarray | None = None
 
     def young_sd(self, ps_idx: np.ndarray, seasons_on: np.ndarray) -> np.ndarray | float:
         """(draws, players) SD of the young-player steps taken over the
@@ -172,6 +174,8 @@ class PositionDraws:
             lam_tau=maybe("lam_tau"),
             ps_career_games_end=getattr(d, "ps_career_games_end", None),
             sigma_young=maybe("sigma_young"),
+            rho_season=maybe("rho_season"),
+            level_mean=maybe("level_mean"),
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:
@@ -220,6 +224,11 @@ def project_latent(
         if vol is not None:
             step = step * vol[:, :, j]
         step = step + np.where(ahead[None] > 0, draws.drift(ps_idx, season - last_season), 0.0)  # one drift per offseason, as in the fit
+        if draws.rho_season is not None:
+            # Pull the level (latent less age and growth effects) toward average.
+            base = draws.age_effect(age_prev) + (g_last if grows else 0.0)
+            m, r = draws.level_mean[:, None], draws.rho_season[:, None] ** ahead[None]
+            latent = m + r * (latent - base - m) + base
         latent = latent + draws.age_effect(age_next) - draws.age_effect(age_prev) + step
         prev = np.maximum(prev, season)
         out[:, :, j] = latent if shift is None else latent + shift[:, :, j]
