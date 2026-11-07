@@ -1,0 +1,11 @@
+# Players known to miss the rest of a season (manual; the injury data has no
+# diagnoses, so the model can't tell a season-ending injury from a long IR
+# stint). Each entry zeroes the player's remaining games in `season` for runs
+# whose news date is on or after `known_on` (point-in-time: earlier runs and
+# backtests ignore it).
+players:
+  - player_id: "00-0040130"
+    name: Jayden Higgins
+    season: 2026
+    known_on: 2026-11-07   # reported by ben
+    note: season-ending injury; on IR since week 1

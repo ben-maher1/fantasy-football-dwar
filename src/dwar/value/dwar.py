@@ -22,7 +22,7 @@ from datetime import date
 import numpy as np
 import polars as pl
 
-from dwar.config import LeagueFormat, ValueConfig
+from dwar.config import LeagueFormat, ValueConfig, load_out_for_season
 from dwar.features.injuries import GROUPS as INJURY_GROUPS
 from dwar.features.player_tables import PlayerTables
 from dwar.features.situation import Covariates
@@ -123,6 +123,7 @@ class ValueInputs:
     # position's lineup share by talent (replacement.start_share) scales wins.
     start: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
     p_play: dict[str, float] | None = None
+    out_for_season: frozenset[str] = frozenset()  # known to miss the rest of this season (config/out_for_season.yaml)
 
 
 def replacement_from_fits(
@@ -193,7 +194,7 @@ def value_inputs(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
     fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], rng: np.random.Generator,
     min_plays: Mapping[str, int] | None = None, situation: dict[str, Covariates] | None = None,
-    injury_weeks: pl.DataFrame | None = None,
+    injury_weeks: pl.DataFrame | None = None, news_as_of: date | None = None,
 ) -> ValueInputs:
     """`injury_weeks` (features.injuries.injury_weeks, as of the run) turns on
     injury history in the availability models and the current-status cut."""
@@ -243,7 +244,8 @@ def value_inputs(
         p_play = play_rate(tables.player_seasons, recent, fmt, cfg.pool_min_games)
         start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play,
                             np.random.default_rng(rng.integers(2**32)))
-    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play)
+    out = load_out_for_season(clock.current, news_as_of or tables.as_of)
+    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play, out)
 
 
 def _situation(
@@ -375,6 +377,8 @@ def position_dwar(
     alive = np.ones(talent.shape[:2])
     total = np.zeros(talent.shape[:2])
     inj = _InjuryPath(inputs, position, latest["player_id"].to_list(), remaining, talent.shape[:2])
+    if inputs.out_for_season:
+        inj.multiplier = np.where(latest["player_id"].is_in(list(inputs.out_for_season)).to_numpy(), 0.0, inj.multiplier)
     for j, season in enumerate(seasons[1:], start=1):
         terms = inj.terms(season)
         # Survive from the previous season into this one, unless the player

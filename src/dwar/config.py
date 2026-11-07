@@ -186,6 +186,19 @@ def load_format(name: str) -> LeagueFormat:
     return LeagueFormat(**_read_yaml(config_dir() / "formats" / f"{name}.yaml"))
 
 
+def load_out_for_season(season: int, news_as_of: date) -> frozenset[str]:
+    """Player ids known (by `news_as_of`) to miss the rest of `season`
+    (config/out_for_season.yaml)."""
+    path = REPO_ROOT / "config" / "out_for_season.yaml"
+    if not path.exists():
+        return frozenset()
+    rows = (yaml.safe_load(path.read_text()) or {}).get("players") or []
+    return frozenset(
+        str(r["player_id"]) for r in rows
+        if int(r["season"]) == season and date.fromisoformat(str(r["known_on"])) <= news_as_of
+    )
+
+
 def load_draft_dates() -> DraftDates:
     return DraftDates(**_read_yaml(config_dir() / "draft_dates.yaml"))
 
