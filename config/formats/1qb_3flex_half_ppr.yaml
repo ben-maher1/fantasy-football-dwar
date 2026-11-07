@@ -10,3 +10,12 @@ lineup:
   TE: 1
   FLEX: 3        # RB/WR/TE
 discount: 0.85
+# Roster (ben, 2026-11-06/07): 16 bench spots (+3 IR, +5 taxi, not counted).
+# Typical split of the 25 active spots per team, confirmed by ben.
+roster:
+  bench: 16
+  by_position:
+    QB: 3
+    RB: 8
+    WR: 10
+    TE: 4

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,12 +55,32 @@ class ScoringConfig(_Frozen):
     rec_bonus_by_position: dict[str, float] = Field(default_factory=dict)
 
 
+class RosterSettings(_Frozen):
+    """Active roster spots (starters + bench) and how a typical team splits
+    them by position. Taxi and IR spots hold rookies and injured players and
+    are left out. With these set, value is measured against the waiver wire
+    and counts only the weeks a player would be in a lineup."""
+
+    bench: int = Field(ge=0)
+    by_position: dict[str, int]
+
+
 class LeagueFormat(_Frozen):
     name: str
     scoring: str
     teams: int = Field(gt=1)
     lineup: dict[str, int]
     discount: float = Field(default=0.85, gt=0, le=1)
+    roster: RosterSettings | None = None
+
+    @model_validator(mode="after")
+    def _roster_fits(self) -> LeagueFormat:
+        if self.roster is not None:
+            active = sum(self.lineup.values()) + self.roster.bench
+            if sum(self.roster.by_position.values()) != active:
+                raise ValueError(f"roster.by_position sums to {sum(self.roster.by_position.values())}, "
+                                 f"but starters + bench = {active}")
+        return self
 
 
 class DraftDates(_Frozen):

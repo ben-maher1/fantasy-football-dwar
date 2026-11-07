@@ -32,7 +32,7 @@ from dwar.value.availability import (
     AvailabilityDraws, fit_availability, injury_terms, season_games, status_effects, status_multiplier,
 )
 from dwar.value.projection import PositionDraws, future_situation, project_talent
-from dwar.value.replacement import replacement_level
+from dwar.value.replacement import replacement_level, share_at, start_share, waiver_level
 from dwar.value.short_games import ROLE_FACTOR, ShortGames, short_games
 from dwar.value.spread import widen
 from dwar.value.wins import team_score_sd, wins_per_game
@@ -109,6 +109,10 @@ class ValueInputs:
     short: dict[str, ShortGames] = field(default_factory=dict)  # positions with short appearances
     situation: dict[str, Covariates] = field(default_factory=dict)  # positions with situation factors
     injury: InjuryInputs | None = None
+    # With roster settings: `replacement` is the waiver level, and each
+    # position's lineup share by talent (replacement.start_share) scales wins.
+    start: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+    p_play: dict[str, float] | None = None
 
 
 def replacement_from_fits(
@@ -130,6 +134,49 @@ def replacement_from_fits(
         for p, v in repl.items():
             levels[p].append(v)
     return {p: np.mean(v, axis=0) for p, v in levels.items() if v}
+
+
+def waiver_from_fits(
+    fits: dict[str, FitResult], draws: dict[str, PositionDraws], fmt: LeagueFormat,
+    seasons: tuple[int, ...], min_games: int,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Waiver level per position and draw, averaged over `seasons`, and the
+    latest season's league-wide talent (posterior means) per position for
+    the lineup simulation."""
+    assert fmt.roster is not None
+    levels: dict[str, list[np.ndarray]] = {p: [] for p in fits}
+    pools: dict[str, np.ndarray] = {}
+    for season in seasons:
+        cols, labels = [], []
+        for p, r in fits.items():
+            keys = r.data.ps_keys
+            idx = np.flatnonzero((keys["season"] == season).to_numpy() & (keys["games_played"] >= min_games).to_numpy())
+            cols.append(draws[p].talent[:, idx])
+            labels += [p] * len(idx)
+            pools[p] = draws[p].talent[:, idx].mean(axis=0)
+        if not labels:
+            continue
+        w = waiver_level(np.concatenate(cols, axis=1), np.array(labels), dict(fmt.roster.by_position), fmt.teams)
+        for p, v in w.items():
+            levels[p].append(v)
+    return {p: np.mean(v, axis=0) for p, v in levels.items() if v}, pools
+
+
+def play_rate(player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: LeagueFormat, min_games: int) -> dict[str, float]:
+    """Share of fantasy weeks a rostered-level player plays, by position:
+    games played over 18 weeks (17 games plus a bye) among the best
+    teams * rostered players by PPG in each of `seasons`."""
+    assert fmt.roster is not None
+    out = {}
+    for p, n in fmt.roster.by_position.items():
+        rates = []
+        for s in seasons:
+            ps = (player_seasons.filter((pl.col("season") == s) & (pl.col("position") == p) & (pl.col("games_played") >= min_games))
+                  .sort("fpts_per_game", descending=True).head(fmt.teams * n))
+            if ps.height:
+                rates.append(float(ps["games_played"].mean()) / 18.0)
+        out[p] = float(np.mean(rates)) if rates else 0.85
+    return out
 
 
 def value_inputs(
@@ -180,7 +227,13 @@ def value_inputs(
             tables.player_weeks, p, (min_plays or {}).get(p, 0), int(r.data.ps_keys["season"].min()), roles(p),
         ))
     }
-    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury)
+    start = p_play = None
+    if fmt.roster is not None:
+        replacement, pools = waiver_from_fits(fits, draws, fmt, recent, cfg.pool_min_games)
+        p_play = play_rate(tables.player_seasons, recent, fmt, cfg.pool_min_games)
+        start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play,
+                            np.random.default_rng(rng.integers(2**32)))
+    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play)
 
 
 def _situation(
@@ -308,6 +361,7 @@ def position_dwar(
     short = inputs.short.get(position)
     short_rate = short.rates(latest["player_id"].to_list(), _next_roles(position, inputs, latest))[None, :] if short else 0.0
     short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0
+    grid = inputs.start.get(position) if inputs.start else None
     alive = np.ones(talent.shape[:2])
     total = np.zeros(talent.shape[:2])
     inj = _InjuryPath(inputs, position, latest["player_id"].to_list(), remaining, talent.shape[:2])
@@ -326,6 +380,9 @@ def position_dwar(
         inj.record(season, share)
         full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
         wins = games * ((1.0 - short_rate) * full_wins + short_rate * short_wins)
+        if grid is not None:
+            # Deep rosters: only the weeks he'd be in a lineup count.
+            wins = wins * share_at(grid, talent[:, :, j])
         total += fmt.discount ** (season - clock.current) * alive * wins
     return latest, total
 
@@ -372,6 +429,12 @@ def dwar_table(
             for p, v in inputs.replacement.items()
         },
         "draws": len(next(iter(inputs.draws.values())).beta1),
+        "baseline": "waiver wire, lineup weeks only" if inputs.start else "starter replacement",
+        "play_rate": {p: round(v, 3) for p, v in (inputs.p_play or {}).items()},
+        "lineup_share": {
+            p: {f"{q:.0f}ppg": round(float(share_at(g, np.array([q]))[0]), 3) for q in (6, 8, 10, 12, 15)}
+            for p, g in (inputs.start or {}).items()
+        },
         "rookie_draft_picks": "unavailable in v1",
         "injury_history": inputs.injury is not None,
         "games_talent_knot": {p: round(k, 2) for p, k in inputs.availability.games_knot.items()},
