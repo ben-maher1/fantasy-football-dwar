@@ -23,16 +23,26 @@ import numpy as np
 import polars as pl
 
 from dwar.config import LeagueFormat, ValueConfig
+from dwar.features.injuries import GROUPS as INJURY_GROUPS
 from dwar.features.player_tables import PlayerTables
 from dwar.features.situation import Covariates
 from dwar.model.fit import FitResult
 from dwar.model.talent import for_position
-from dwar.features.injuries import GROUPS as INJURY_GROUPS
 from dwar.value.availability import (
-    AvailabilityDraws, fit_availability, injury_terms, season_games, status_effects, status_multiplier,
+    AvailabilityDraws,
+    fit_availability,
+    injury_terms,
+    season_games,
+    status_effects,
+    status_multiplier,
 )
 from dwar.value.projection import PositionDraws, future_situation, project_talent
-from dwar.value.replacement import replacement_level, share_at, start_share, waiver_level
+from dwar.value.replacement import (
+    replacement_level,
+    share_at,
+    start_share,
+    waiver_level,
+)
 from dwar.value.short_games import ROLE_FACTOR, ShortGames, short_games
 from dwar.value.spread import widen
 from dwar.value.wins import team_score_sd, wins_per_game
