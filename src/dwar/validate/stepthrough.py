@@ -388,10 +388,10 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
 
 def step_through(
     s: Settings, d: ModelData, test_seasons: tuple[int, ...], last_season: int, seed: int,
-    m: int = 40, r: int = 400,
+    m: int = 40, r: int = 400, horizon: int = HORIZON, discount: float = DISCOUNT,
 ) -> pl.DataFrame:
     """One row per (player, test season, games already played that season,
-    stretch): `horizon` 0 is the rest of that season, 1..HORIZON later
+    stretch): `horizon` 0 is the rest of that season, 1..horizon later
     seasons, and -1 the discounted total. Stretches past `last_season` (the
     last season with outcomes in `d`) are not scored."""
     rows = []
@@ -411,16 +411,16 @@ def step_through(
                 if season in test_seasons and k < len(g):
                     later = [len(g) - k] + [
                         len(p.games[by_season[season + h]]) if season + h in by_season else 0
-                        for h in range(1, HORIZON + 1)
+                        for h in range(1, horizon + 1)
                     ]
-                    scored = [season + h <= last_season for h in range(HORIZON + 1)]
+                    scored = [season + h <= last_season for h in range(horizon + 1)]
                     sims = _simulate_ahead(f, j, k, later, rng, r)
                     actual = [g[k:]] + [p.games[by_season[season + h]] if season + h in by_season else None
-                                        for h in range(1, HORIZON + 1)]
+                                        for h in range(1, horizon + 1)]
                     base = {"player_id": p.player_id, "season": season, "games_before": k,
                             "career_games": float(p.career_games[j][k]), "career_year": p.career_year[j],
                             "pick_z": p.pick_z, "undrafted": p.undrafted}
-                    for h in range(HORIZON + 1):
+                    for h in range(horizon + 1):
                         if sims[h] is None or not scored[h]:
                             continue
                         ppg, a = sims[h].mean(axis=1), float(actual[h].mean())
@@ -428,8 +428,8 @@ def step_through(
                                             "pred_mean": float(ppg.mean()), "log_score": kde_log_density(ppg, a),
                                             "pit": pit(ppg, a)})
                     if all(scored):
-                        tot = sum(DISCOUNT**h * sims[h].sum(axis=1) for h in range(HORIZON + 1) if sims[h] is not None)
-                        a_tot = sum(DISCOUNT**h * float(actual[h].sum()) for h in range(HORIZON + 1)
+                        tot = sum(discount**h * sims[h].sum(axis=1) for h in range(horizon + 1) if sims[h] is not None)
+                        a_tot = sum(discount**h * float(actual[h].sum()) for h in range(horizon + 1)
                                     if actual[h] is not None)
                         rows.append(base | {"horizon": -1, "games": int(sum(later)), "actual": a_tot,
                                             "pred_mean": float(np.mean(tot)), "log_score": kde_log_density(tot, a_tot),

@@ -141,6 +141,10 @@ VARIANTS: dict[str, dict] = {
     # tails barely moved (PIT<.10 23% -> 23%). Not kept.
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
+    # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before
+    # switching DWAR's horizon to 5 seasons).
+    "young5": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+               "fade_qb": True, "young_steps": (POSITION,), "horizon": 5, "discount": 0.8},
     "plateau": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
                 "fade_qb": True, "young_steps": (POSITION,), "age_curve": {POSITION: "plateau"}},
     "agetalent": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
@@ -167,6 +171,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     fade = v.pop("fade_qb", False)
     reuse = v.pop("reuse_fit", {}).get(period)
     particles = v.pop("particles", PARTICLES)
+    horizon, discount = v.pop("horizon", HORIZON), v.pop("discount", DISCOUNT)
     if "sampler" in v:
         v["sampler"] = base.sampler.model_copy(update=v["sampler"])
     cfg = base.model_copy(update={"first_season": first_season, "positions": (POSITION,),
@@ -207,7 +212,8 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     if full.prospect_x_names != settings.prospect_names:
         raise ValueError(f"prospect columns differ: {full.prospect_x_names} vs {settings.prospect_names}")
     start = time.perf_counter()
-    rows = step_through(settings, full, test_seasons, LAST_SEASON, seed=cfg.seed, m=particles)
+    rows = step_through(settings, full, test_seasons, LAST_SEASON, seed=cfg.seed, m=particles,
+                        horizon=horizon, discount=discount)
     log.info("%s step-through: %d rows in %.0fs", name, rows.height, time.perf_counter() - start)
     path = out / "forecasts.parquet"
     rows.write_parquet(path)
