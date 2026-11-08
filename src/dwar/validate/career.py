@@ -156,6 +156,10 @@ VARIANTS: dict[str, dict] = {
     # sigma_rookie vs the first-season bump; ben, 2026-11-07).
     "bump2": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,), "season_bump_first": False},
+    # bump with twice the draws and longer tuning, so the first-season
+    # bump vs start-SD trade-off can mix (ben, 2026-11-08).
+    "bumpl": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 7000, "tune": 2000},
+              "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,)},
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before
