@@ -160,6 +160,10 @@ VARIANTS: dict[str, dict] = {
     # bump vs start-SD trade-off can mix (ben, 2026-11-08).
     "bumpl": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 7000, "tune": 2000},
               "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,)},
+    # Rookie season's own boost/dip that does not carry into year 2
+    # (star over-forecast plan option A; ben approved 2026-11-08).
+    "fluke": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "young_steps": (POSITION,), "rookie_fluke": (POSITION,)},
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before

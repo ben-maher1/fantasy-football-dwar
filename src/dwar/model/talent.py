@@ -300,7 +300,7 @@ def build_talent_model(
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
-    season_bump: bool = False, season_bump_first: bool = True,
+    season_bump: bool = False, season_bump_first: bool = True, rookie_fluke: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -486,6 +486,14 @@ def build_talent_model(
             level = csum - csum[d.ps_start] + steps[d.ps_start]
 
         latent = level + age_effect
+        if rookie_fluke and len(rookies):
+            # A rookie season's own boost or dip that does not carry into
+            # year 2 (star over-forecast plan, option A, 2026-11-08).
+            sigma_fluke = pm.HalfNormal("sigma_fluke", pr["tau"])
+            fluke_z = pm.Normal("fluke_z", 0.0, 1.0, shape=len(rookies))
+            first_row = np.full(d.n_players, -1)
+            first_row[d.ps_player[d.ps_start == np.arange(d.n_ps)]] = np.flatnonzero(d.ps_start == np.arange(d.n_ps))
+            latent = pt.inc_subtensor(latent[first_row[rookies]], sigma_fluke * fluke_z)
         if season_bump:
             # A season's passing bump on top of the lasting level: an AR(1)
             # across a player's seasons, bump_s = rho^gap bump_prev + e_s,

@@ -90,6 +90,7 @@ class Settings:
     level_mean: np.ndarray | None = None
     rho_bump: np.ndarray | None = None      # fading season bump (season_bump): AR(1) rate and stationary SD
     sigma_bump: np.ndarray | None = None
+    sigma_fluke: np.ndarray | None = None   # rookie season's own non-lasting boost/dip (rookie_fluke); None = off
     bump_first: bool = True                 # False: no bump in a player's first season
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
@@ -129,7 +130,7 @@ class Settings:
         """The bump `years` seasons on: faded by rho_bump^years plus a fresh
         part (a fresh stationary draw out of a bump-free first season)."""
         if self.rho_bump is None:
-            return b
+            return np.zeros_like(b)  # no bump model; a rookie fluke ends with the season
         if from_first and not self.bump_first:
             return self.sigma_bump[draw] * rng.standard_normal(len(b))
         r = self.rho_bump[draw] ** max(years, 1.0)
@@ -203,6 +204,7 @@ class Settings:
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
             rho_bump=take("rho_bump") if "rho_bump" in post else None,
             sigma_bump=take("sigma_bump") if "rho_bump" in post else None,
+            sigma_fluke=take("sigma_fluke") if "sigma_fluke" in post else None,
             bump_first=bump_first,
         )
 
@@ -318,6 +320,8 @@ class Filter:
         self.dev = np.zeros(len(self.draw))  # in-season form ("form" mode); resets each season
         self.bump = s.bump_start(self.draw, rng)  # this season's passing bump (season_bump)
         self.in_first = True                      # still in the player's first season
+        self.fluke = (s.sigma_fluke[self.draw] * rng.standard_normal(len(self.draw))
+                      if s.sigma_fluke is not None and not pl_.pre_window else np.zeros(len(self.draw)))
         self.logw = np.zeros(len(self.draw))
 
     def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0, career_year: int = 0) -> None:
@@ -328,6 +332,7 @@ class Filter:
         self.dev = np.zeros(len(self.x))
         self.bump = self.s.bump_next(self.bump, self.draw, gap, self.rng, self.in_first)
         self.in_first = False
+        self.fluke = np.zeros(len(self.x))
 
     def before_game(self, first_in_window: bool, career_games: float) -> None:
         self.x, self.dev = _game_move(self.s, self.x, self.dev, self.draw, first_in_window, career_games, self.rng)
@@ -337,7 +342,7 @@ class Filter:
         return _age_effect(self.s, p.age_c[j], self.draw, self.shift) + _growth(self.s, p.career_year[j], p.pick_z)[self.draw]
 
     def update(self, j: int, y: float) -> None:
-        self.logw = self.logw + _loglik(self.s, self.x + self.bump + self.dev + self.season_shift(j), y, self.draw)
+        self.logw = self.logw + _loglik(self.s, self.x + self.bump + self.fluke + self.dev + self.season_shift(j), y, self.draw)
         w = self.logw.reshape(self.s.n, self.m)
         w = np.exp(w - w.max(axis=1, keepdims=True))
         w = w / w.sum(axis=1, keepdims=True)
@@ -348,6 +353,7 @@ class Filter:
             idx = (cum[:, None, :] < u[:, :, None]).sum(axis=2)
             idx = np.minimum(idx, self.m - 1) + np.arange(self.s.n)[:, None] * self.m
             self.x, self.dev, self.bump = self.x[idx.ravel()], self.dev[idx.ravel()], self.bump[idx.ravel()]
+            self.fluke = self.fluke[idx.ravel()]
             if self.shift is not None:
                 self.shift = self.shift[idx.ravel()]
             self.logw = np.zeros(len(self.x))
@@ -363,7 +369,9 @@ class Filter:
         pick = np.minimum((cum < self.rng.random(r)[:, None]).sum(axis=1), self.m - 1)
         idx = groups * self.m + pick
         shift = None if self.shift is None else self.shift[idx]
-        return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift, self.bump[idx].copy()
+        # The rookie fluke rides on the bump slot: both are this season's
+        # non-lasting part (only one is on in any fit).
+        return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift, self.bump[idx] + self.fluke[idx]
 
 
 def _game_move(s: Settings, x: np.ndarray, dev: np.ndarray, draw: np.ndarray, first_in_window: bool,
