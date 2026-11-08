@@ -254,8 +254,15 @@ def build_model_data(
         # on the fit's players, with merged missing flags.
         cols = tuple(c for c in prospect_covariates.columns if c != "player_id")
         extra_static = players.join(prospect_covariates, on="player_id", how="left").sort("player_idx")
-        extra_ref = extra_static if reference_players is None else (
-            pl.DataFrame({"player_id": list(reference_players)}).join(prospect_covariates, on="player_id", how="left")
+        # Scales and flags come from players whose rookie season is in the
+        # window (only they have a rookie prior), so flags that coincide for
+        # them merge (a missing college match and a pre-2008 draft differ
+        # only for veterans the prior never sees).
+        in_window = (pl.col("first_season").fill_null(first_season) >= first_season)
+        extra_ref = (extra_static if reference_players is None else pl.DataFrame({"player_id": list(reference_players)}))
+        extra_ref = (
+            extra_ref.select("player_id").join(tables.player_static.select("player_id", "first_season"), on="player_id", how="left")
+            .filter(in_window).join(prospect_covariates, on="player_id", how="left")
         )
         extra = standardize_with_flags(extra_static, cols, extra_ref)
         prospect = pl.concat([prospect, extra], how="horizontal")

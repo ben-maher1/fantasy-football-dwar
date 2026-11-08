@@ -122,20 +122,18 @@ def test_prospect_covariates_slot(small):
     extra = pl.DataFrame({"player_id": ["B", "A", "C"], "breakout_age": [19.0, 20.0, 21.0]})
     d = build_model_data(small, first_season=2006, prospect_covariates=extra)
     assert d.prospect_x_names[-1] == "breakout_age_z"
-    assert d.prospect_x[:, -1].tolist() == [0.0, -1.0, 1.0]  # A=20, B=19, C=21, z-scored
+    # z-scored on in-window players only (A and B; C's career began in 2001): mean 19.5, SD 0.707.
+    assert np.allclose(d.prospect_x[:, -1], np.array([20.0, 19.0, 21.0]) / 0.7071 - 19.5 / 0.7071, atol=1e-3)
 
 
 def test_prospect_covariates_missing_flag_and_reference(small):
-    extra = pl.DataFrame({"player_id": ["A", "B"], "recruit": [0.9, 0.8]})
+    extra = pl.DataFrame({"player_id": ["A", "C"], "recruit": [0.9, 0.8]})
     d = build_model_data(small, first_season=2006, prospect_covariates=extra)
-    i = d.prospect_x_names.index("recruit_z")
-    flag = [n for n in d.prospect_x_names if n.startswith("recruit_missing") or ("recruit" in n and "missing" in n)]
-    assert flag, d.prospect_x_names
-    j = d.prospect_x_names.index(flag[0])
-    c = d.player_ids.index("C")
-    assert d.prospect_x[c, i] == 0.0 and d.prospect_x[c, j] == 1.0
-    # Scored on a reference set's scale: A and B hold every non-missing value, so the scale is the same.
-    d2 = build_model_data(small, first_season=2006, prospect_covariates=extra, reference_players=("A", "B"))
+    i, j = d.prospect_x_names.index("recruit_z"), d.prospect_x_names.index("recruit_missing")
+    b = d.player_ids.index("B")
+    assert d.prospect_x[b, i] == 0.0 and d.prospect_x[b, j] == 1.0
+    # Scored on a reference set's scale: the same in-window players give the same scale.
+    d2 = build_model_data(small, first_season=2006, prospect_covariates=extra, reference_players=("A", "B", "C"))
     assert np.allclose(d2.prospect_x[:, i], d.prospect_x[:, i])
 
 
