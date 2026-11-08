@@ -7,3 +7,6 @@ calibrate_spread: [QB]   # widen QB ranges by past misses (value/spread.py); ste
 spread_factor:           # set from the latest backtest (validate summary "spread_factor")
   QB: 1.343              # 2012-2025 backtest of the situation-factor model (run F)
 short_by_role: [QB]      # QB short-game chance by preseason role, QB1 or not (situation factors step)
+games_hinge_quantile: 0.75  # games played stop rising with talent above the 75th percentile (injury step)
+games_lagged_talent: true  # games model pairs games with last season's talent (injury step)
+injury_history: true     # weeks missed to injury in the last two seasons + current injury status (injury step)
