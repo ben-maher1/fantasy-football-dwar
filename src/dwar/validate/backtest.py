@@ -19,6 +19,7 @@ import polars as pl
 
 from dwar.config import ModelConfig, load_scoring, uses_situation
 from dwar.features.asof import REGULAR_SEASON, RawTables, asof_snapshot
+from dwar.features.opportunity import opportunity_table
 from dwar.features.player_tables import PlayerTables, build_player_tables
 from dwar.features.situation import (
     Covariates,
@@ -86,9 +87,10 @@ def fit_season(
     record_path = out / "fit_log.json"
     record = json.loads(record_path.read_text()) if record_path.exists() else {}
     meta = {"as_of": tables.as_of.isoformat(), "scoring": SCORING, "backtest_season": season}
+    opp = opportunity_table(tables, load_scoring(SCORING)) if cfg.opportunity else None
     fits = {}
     for position in cfg.positions:
-        d = position_data(tables, position, cfg, cov)
+        d = position_data(tables, position, cfg, cov, opp)
         cached = load_fit(d, out)
         if cached is not None:
             fits[position] = cached

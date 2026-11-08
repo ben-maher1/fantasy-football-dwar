@@ -179,3 +179,17 @@ def test_low_play_weeks_count_as_games_but_are_not_fit():
 def test_min_plays_without_play_counts_fails_loudly(small):
     with pytest.raises(ValueError, match="play counts"):
         build_model_data(small, first_season=2006, min_plays=15)
+
+
+def test_career_year_and_opportunity_alignment():
+    from .simulate import simulate
+
+    sim = simulate(n_players=40, usage=True, seed=5)
+    d = sim.data
+    assert len(d.ps_career_year) == d.n_ps
+    assert (d.ps_career_year[d.pre_window[d.ps_player] > 0] == 0).all()  # veterans get no growth terms
+    assert (d.ps_career_year[d.pre_window[d.ps_player] == 0] >= 1).all()
+    assert d.x is not None and d.x.shape == d.y.shape and np.isfinite(d.x).all()
+    first = d.ps_is_first & (d.pre_window[d.ps_player] == 0)
+    drafted = ~np.isnan(d.log_pick_z[d.ps_player])
+    assert (d.ps_career_year[first & drafted] == 1).all()  # in-window rookies start at career year 1

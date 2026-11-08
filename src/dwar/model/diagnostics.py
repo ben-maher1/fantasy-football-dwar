@@ -55,9 +55,17 @@ def _extreme(stat: DataTree, worst: str) -> tuple[float, str]:
 
 def check_fit(posterior: DataTree, thresholds: DiagnosticThresholds) -> Diagnostics:
     divergences = int(np.asarray(posterior["sample_stats"]["diverging"]).sum())
-    max_rhat, rhat_at = _extreme(az.rhat(posterior), "max")
-    min_bulk, bulk_at = _extreme(az.ess(posterior, method="bulk"), "min")
-    min_tail, tail_at = _extreme(az.ess(posterior, method="tail"), "min")
+    # A setting held fixed (stored for downstream use, the same in every
+    # draw) has nothing to check, and its R-hat would be NaN.
+    post = posterior["posterior"].to_dataset()
+    fixed = [v for v, da in post.data_vars.items() if da.size and float(np.ptp(np.asarray(da.values, dtype=float))) == 0.0
+             and np.asarray(da.values).ndim == 2]
+    checked = posterior.copy()
+    if fixed:
+        checked["posterior"] = DataTree(post.drop_vars(fixed))
+    max_rhat, rhat_at = _extreme(az.rhat(checked), "max")
+    min_bulk, bulk_at = _extreme(az.ess(checked, method="bulk"), "min")
+    min_tail, tail_at = _extreme(az.ess(checked, method="tail"), "min")
 
     failures = []
     if divergences > thresholds.max_divergences:

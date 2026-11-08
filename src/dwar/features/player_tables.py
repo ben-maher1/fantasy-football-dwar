@@ -14,6 +14,8 @@ import polars as pl
 
 from dwar.config import ScoringConfig, data_dir
 from dwar.features.asof import PLAY_COLUMNS, AsOfSnapshot
+from dwar.features.exits import flag_injury_exits
+from dwar.features.qb_rating import team_qb_ratings
 from dwar.features.scoring import fantasy_points
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
@@ -56,6 +58,9 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
     `plays` counts the player's own pass attempts, sacks taken, and
     carries, a proxy for snaps that exists for every season.
 
+    `qb_rating` rates the team's main passer that game from his earlier
+    games (`features/qb_rating.py`); null when unknown.
+
     A game played is a row in player_stats, or (2013 on) a game with offense
     snaps but no stat row, which scores zero. Without the latter, a receiver
     who played without a target would drop out and inflate points per game.
@@ -77,7 +82,16 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
         )
     )
     weeks = pl.concat([scored, snap_only], how="vertical_relaxed")
+    weeks = weeks.join(snap.snaps.select("player_id", "game_id", *(c for c in ("offense_snaps", "offense_pct") if c in snap.snaps.columns)).unique(["player_id", "game_id"]),
+                       on=["player_id", "game_id"], how="left")
+    weeks = flag_injury_exits(weeks)
     positions = _season_positions(snap, weeks.select("player_id", "season"))
+    qb = team_qb_ratings(snap.stats)
+    if qb.height:
+        qb = qb.with_columns(pl.col("season").cast(weeks.schema["season"]), pl.col("week").cast(weeks.schema["week"]))
+        weeks = weeks.join(qb, on=["season", "week", "team"], how="left")
+    else:
+        weeks = weeks.with_columns(qb_rating=pl.lit(None, pl.Float64))
     return (
         weeks.join(positions, on=["player_id", "season"], how="left")
         .filter(pl.col("position").is_in(SKILL_POSITIONS))

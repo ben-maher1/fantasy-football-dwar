@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import time
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -17,14 +18,23 @@ import numpy as np
 import nutpie
 import polars as pl
 import xarray as xr
+from nutpie import zarr_store
 from xarray import DataTree
 
-from dwar.config import ModelConfig
+from dwar.config import ModelConfig, data_dir
 from dwar.features.player_tables import PlayerTables
 from dwar.features.situation import Covariates
 from dwar.model.data import ModelData, build_model_data
 from dwar.model.diagnostics import Diagnostics, FitFailed, check_fit
-from dwar.model.talent import LIKELIHOOD_PARAMS, build_talent_model, is_hurdle, simulate_weeks
+from dwar.model.talent import (
+    LIKELIHOOD_PARAMS,
+    build_talent_model,
+    end_talent,
+    form_dev_last,
+    is_hurdle,
+    simulate_weeks,
+    young_cum_last,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,18 +53,78 @@ class FitResult:
 
 # Started at zero instead of a random point: with a log-scale latent, a
 # random age-curve start (beta2 near +-2 at age 41) puts exp() past overflow.
-UNJITTERED = ("beta1", "beta2", "age_slope_pre", "age_slope_post")
+# age_shift is jittered: started at exactly 0, nutpie found no valid initial point.
+UNJITTERED = ("beta1", "beta2", "beta3", "age_slope_pre", "age_slope_post", "age_rise", "age_fall", "age_fall2")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
-    model = build_talent_model(d, cfg.likelihood_for(d.position), cfg.age_curve.get(d.position, "quadratic"))
+    p = d.position
+    model = build_talent_model(
+        d, cfg.likelihood_for(p), cfg.age_curve.get(p, "quadratic"),
+        round1=p in cfg.rookie_round1, growth=p in cfg.growth,
+        opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
+        game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
+        form_rho=cfg.form_rho, tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first,
+        young_steps=p in cfg.young_steps,
+    )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
     s = cfg.sampler
-    return nutpie.sample(
-        compiled, draws=s.draws, tune=s.tune, chains=s.chains, seed=cfg.seed, progress_bar=False,
-        save_warmup=False,
-    )
+    # Draws go to a zarr store on disk while sampling: held in memory, the
+    # game-by-game WR fit (a form term per game) ran out of memory.
+    with tempfile.TemporaryDirectory(dir=data_dir()) as tmp:
+        nutpie.sample(
+            compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=s.tune, chains=s.chains, seed=cfg.seed,
+            progress_bar=False, save_warmup=False, zarr_store=zarr_store.LocalStore(tmp),
+        )
+        posterior = _compact(Path(tmp), d, cfg.likelihood_for(p))
+    # The zarr store adds dict attributes (sampler settings) netCDF cannot save.
+    for node in posterior.subtree:
+        node.attrs = {k: v for k, v in node.attrs.items() if isinstance(v, (str, int, float, np.number))}
+    return posterior
+
+
+def add_end_talent(post: xr.Dataset, likelihood: str, zero_value: float) -> None:
+    """With young steps, make `talent` each player-season's expected points
+    after its last game (season level plus the steps so far), what
+    replacement level and the value layer need; `loc` stays the season level."""
+    p = {n: post[n].values[..., None] for n in ("sigma", "nu", "h0", "h1")} | {"zero_value": zero_value}
+    post["talent"] = (post["talent"].dims, end_talent(likelihood, post["loc"].values, post["young_cum"].values, p))
+
+
+def _compact(store: Path, d: ModelData, likelihood: str) -> DataTree:
+    """The posterior and sample stats, loaded into memory, without warmup.
+    The "form" mode's per-game shocks (`form_z`, one per game per draw: about
+    3.4 GB for WR 2013-2026) are replaced by what forecasting needs, the form
+    after each player-season's last game (`form_dev`), computed a chain at a
+    time. Fit checks then cover the form term through its settings
+    (rho_form, sigma_form, lam_form) rather than every per-game shock."""
+    import zarr
+
+    lazy = xr.open_datatree(store, engine="zarr", consolidated=False)
+    post = lazy["posterior"].to_dataset()
+    post = post.drop_vars([v for v in post.data_vars if str(v).endswith("__")])  # unconstrained copies
+    if "form_z" in post:
+        post = post.drop_vars("form_z").load()
+        shocks = zarr.open_array(store / "posterior" / "form_z", mode="r")  # read a chain at a time
+        dev = np.stack([
+            form_dev_last(d, np.asarray(shocks[c]), post["rho_form"].values[c], post["sigma_form"].values[c],
+                          post["lam_form"].values[c])
+            for c in range(post.sizes["chain"])
+        ])
+        post["form_dev"] = (("chain", "draw", "form_player_season"), dev)
+    if "young_z" in post:
+        post = post.drop_vars("young_z").load()
+        z = zarr.open_array(store / "posterior" / "young_z", mode="r")
+        post["young_cum"] = (("chain", "draw", "form_player_season"), np.stack([
+            young_cum_last(d, np.asarray(z[c]), post["sigma_young"].values[c]) for c in range(post.sizes["chain"])
+        ]))
+        add_end_talent(post, likelihood, d.zero_week_mean)
+    stats = lazy["sample_stats"].to_dataset()
+    # Per-draw stats only (divergences, energy, step size, ...): the store also
+    # holds per-draw gradients and positions, several GB each here.
+    stats = stats[[v for v in stats.data_vars if stats[v].dims == ("chain", "draw")]]
+    return DataTree.from_dict({"posterior": post.load(), "sample_stats": stats.load()})
 
 
 def _draws(posterior: DataTree, name: str) -> np.ndarray:
@@ -150,26 +220,31 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
 
 def position_data(
     tables: PlayerTables, position: str, cfg: ModelConfig, cov: dict[str, Covariates] | None = None,
+    opportunity: pl.DataFrame | None = None,
 ) -> ModelData:
-    """One position's model data, with its situation factors if any."""
+    """One position's model data, with its situation factors if any, and its
+    weekly opportunity points if the position uses them."""
     c = (cov or {}).get(position)
+    extra = {"opportunity": opportunity} if opportunity is not None and position in cfg.opportunity else {}
     return build_model_data(
-        tables, position, cfg.first_season, min_plays=cfg.min_plays.get(position, 0),
+        tables, position, cfg.first_season_by_position.get(position, cfg.first_season), min_plays=cfg.min_plays.get(position, 0),
         season_covariates=c.level if c is not None and c.level.width > 2 else None,
         season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
+        injury_exits="drop" if position in cfg.injury_exits else "keep",
+        **extra,
     )
 
 
 def fit_positions(
     tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None,
-    cov: dict[str, Covariates] | None = None,
+    cov: dict[str, Covariates] | None = None, opportunity: pl.DataFrame | None = None,
 ) -> dict[str, FitResult]:
     """Fit every configured position. All positions are attempted so each
     writes its diagnostics; if any fails, raises FitFailed for the first
     failure after the rest have run (the run is failed as a whole)."""
     results, failures = {}, []
     for position in cfg.positions:
-        d = position_data(tables, position, cfg, cov)
+        d = position_data(tables, position, cfg, cov, opportunity)
         try:
             results[position] = fit(d, cfg, out_dir, meta)
         except FitFailed as e:

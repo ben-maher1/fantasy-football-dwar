@@ -187,3 +187,11 @@ def test_short_games_lower_value(end_to_end):
     assert (wr["dwar_mean_short"] <= wr["dwar_mean"] + 1e-9).all() and (wr["dwar_mean_short"] < wr["dwar_mean"]).any()
     rb = joined.filter(pl.col("position") == "RB")
     np.testing.assert_allclose(rb["dwar_mean_short"], rb["dwar_mean"])
+
+
+def test_out_for_season_is_point_in_time():
+    from datetime import date
+    from dwar.config import load_out_for_season
+    assert "00-0040130" in load_out_for_season(2026, date(2026, 11, 7))
+    assert "00-0040130" not in load_out_for_season(2026, date(2026, 11, 6))  # before it was known
+    assert "00-0040130" not in load_out_for_season(2027, date(2026, 11, 7))  # only that season

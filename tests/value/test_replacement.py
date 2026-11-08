@@ -46,3 +46,26 @@ def test_position_exhausted_gives_zero():
 def test_unknown_slot_rejected():
     with pytest.raises(ValueError, match="unknown lineup slots"):
         starters_used(TALENT, POSITIONS, {"K": 1}, teams=2)
+
+
+def test_waiver_level_is_first_unrostered():
+    import numpy as np
+    from dwar.value.replacement import waiver_level
+    t = np.arange(30, 0, -1.0)[None, :]  # 30 .. 1
+    pos = np.array(["WR"] * 30)
+    w = waiver_level(t, pos, {"WR": 2}, teams=12)  # 24 rostered
+    assert w["WR"][0] == 6.0
+
+
+def test_start_share_starters_always_bench_sometimes():
+    import numpy as np
+    from dwar.value.replacement import share_at, start_share
+    rng = np.random.default_rng(0)
+    talent = {"WR": np.linspace(20, 1, 40), "RB": np.linspace(18, 1, 40)}
+    grid = start_share(talent, {"WR": 1, "RB": 1}, teams=4, rostered={"WR": 3, "RB": 3},
+                       p_play={"WR": 0.8, "RB": 0.8}, rng=rng, weeks=400)
+    t, s = grid["WR"]
+    assert s[-1] == 1.0                 # each team's best WR starts whenever he plays
+    assert 0.0 < s[0] < 0.2             # third WR: only when both above him are out
+    assert share_at(grid["WR"], np.array([25.0]))[0] == 1.0
+    assert np.all(np.diff(share_at(grid["WR"], np.linspace(1, 20, 50))) >= 0)

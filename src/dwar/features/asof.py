@@ -37,9 +37,11 @@ REGULAR_SEASON = "REG"
 
 # Plays a player passed or carried on, a snap-count proxy for every season.
 PLAY_COLUMNS = ("attempts", "sacks_suffered", "carries")
+# Passing EPA, for the QB rating of the passer a receiver played with (features/qb_rating.py).
+EXTRA_KEEP = ("passing_epa",)
 STAT_KEEP = (
     "player_id", "player_display_name", "season", "week", "game_id", "team", "opponent_team",
-    *sorted({c for cols in STAT_COLUMNS.values() for c in cols} | set(PLAY_COLUMNS)),
+    *sorted({c for cols in STAT_COLUMNS.values() for c in cols} | set(PLAY_COLUMNS) | set(EXTRA_KEEP)),
 )
 COMBINE_KEEP = ("ht", "wt", "forty", "bench", "vertical", "broad_jump", "cone", "shuttle")
 
@@ -101,7 +103,7 @@ def asof_snapshot(
 
     stats = _gate(
         raw.player_stats.filter(pl.col("player_id").is_not_null())
-        .select(STAT_KEEP)
+        .select([c for c in STAT_KEEP if c not in EXTRA_KEEP or c in raw.player_stats.columns])
         .join(games.select("game_id", "gameday"), on="game_id", how="inner")  # inner = REG only
         .with_columns(knowable_on=pl.col("gameday") + timedelta(days=1)),
         as_of,
@@ -114,6 +116,7 @@ def asof_snapshot(
             "player_id", "season", "week", "game_id", "team", "gameday",
             pl.col("opponent").alias("opponent_team"),
             pl.col("offense_snaps").fill_null(0),
+            *([pl.col("offense_pct")] if "offense_pct" in raw.snap_counts.columns else []),
         )
         .with_columns(knowable_on=pl.col("gameday") + timedelta(days=1)),
         as_of,

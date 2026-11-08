@@ -1,0 +1,21 @@
+# ben's league (2026-11-06): 1QB, 2 RB, 2 WR, 1 TE, 3 flex, half PPR.
+# 12 teams assumed (ben's other leagues are 12).
+name: 1qb_3flex_half_ppr
+scoring: half_ppr
+teams: 12
+lineup:
+  QB: 1
+  RB: 2
+  WR: 2
+  TE: 1
+  FLEX: 3        # RB/WR/TE
+discount: 0.80   # ben, 2026-11-07 (with a 5-season horizon)
+# Roster (ben, 2026-11-06/07): 16 bench spots (+3 IR, +5 taxi, not counted).
+# Typical split of the 25 active spots per team, confirmed by ben.
+roster:
+  bench: 16
+  by_position:
+    QB: 3
+    RB: 8
+    WR: 10
+    TE: 4

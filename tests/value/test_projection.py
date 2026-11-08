@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from dwar.value.projection import PositionDraws, inverse_softplus, project_talent
 from dwar.model.talent import softplus
+from dwar.value.projection import PositionDraws, inverse_softplus, project_talent
 
 
 def draws(n: int, talent: list[float], beta1=0.0, beta2=0.0, tau=0.0) -> PositionDraws:
@@ -110,3 +110,73 @@ def test_future_situation_fades_and_uses_typical_moves():
     np.testing.assert_allclose(shift[0, 0], [0.0, 2.0, 2.0 * rho[0]])
     # Typical step scale over the later seasons: mean of exp(0) and exp(log 2).
     np.testing.assert_allclose(vol[0, 0], [1.0, 2.0, 1.5])
+
+
+def test_growth_steps_follow_career_year_and_draft_capital():
+    """A rookie (career year 1) gains the year-2 step next season and the
+    year-3 step the season after, then keeps both; a better pick (lower
+    standardized log pick) grows more. A veteran (career year 0: began
+    before the fitting window) gains nothing."""
+    d = draws(3, [8.0, 8.0, 8.0])
+    d = PositionDraws(**{
+        **d.__dict__,
+        "growth": np.tile([1.0, 0.5], (3, 1)), "growth_pick": np.tile([-0.5, 0.0], (3, 1)),
+        "career_year": np.array([1, 1, 0]), "ps_pick_z": np.array([-1.0, 1.0, 0.0]),
+    })
+    out = project_talent(d, np.array([0, 1, 2]), np.array([2025, 2025, 2025]), np.full(3, 26.0),
+                         np.arange(2025, 2029), np.random.default_rng(0))
+    np.testing.assert_allclose(out[0, 0], [8.0, 9.5, 10.0, 10.0])  # year-2 step 1 + 0.5 for a high pick
+    np.testing.assert_allclose(out[0, 1], [8.0, 8.5, 9.0, 9.0])    # a late pick: 1 - 0.5
+    np.testing.assert_allclose(out[0, 2], 8.0)
+
+
+def test_qb_drift_moves_each_offseason_and_never_looks_back():
+    from dataclasses import replace
+
+    from dwar.features.qb_rating import LOW_KNOT
+
+    rng = np.random.default_rng(0)
+    q = LOW_KNOT - 1.0  # one unit below the knot
+    d = replace(draws(3, [10.0]), qb_drift=np.full(3, 0.5), qb_drift_low=np.full(3, 1.0), ps_qb_end=np.array([q]))
+    out = project_talent(d, np.array([0]), np.array([2025]), np.array([26.0]), np.arange(2025, 2028), rng)
+    per = 0.5 * q - 1.0
+    np.testing.assert_allclose(out[0, 0], [10.0, 10.0 + per, 10.0 + 2 * per])
+
+
+def test_qb_fade_uses_todays_qb_next_offseason_then_fades():
+    from dataclasses import replace
+
+    from dwar.features.qb_rating import QBFade
+
+    rng = np.random.default_rng(0)
+    fade = QBFade(mean=0.5, keep=(0.25, 0.1))
+    d = replace(draws(3, [10.0]), qb_drift=np.full(3, 0.5), qb_drift_low=np.zeros(3), ps_qb_end=np.array([-1.5]), fade=fade)
+    out = project_talent(d, np.array([0]), np.array([2025]), np.array([26.0]), np.arange(2025, 2029), rng)
+    steps = 0.5 * np.array([-1.5, 0.5 + 0.25 * -2.0, 0.5 + 0.1 * -2.0])
+    np.testing.assert_allclose(out[0, 0], 10.0 + np.concatenate([[0.0], np.cumsum(steps)]))
+
+
+def test_form_rest_averages_the_decay_over_remaining_games():
+    from dataclasses import replace
+
+    d = replace(draws(2, [10.0, 8.0]), rho_form=np.array([0.5, 0.5]), form_dev=np.array([[2.0, -1.0], [2.0, -1.0]]))
+    got = d.form_rest(np.array([0, 1]), np.array([2, 0]))
+    np.testing.assert_allclose(got[:, 0], 2.0 * (0.5 + 0.25) / 2)
+    np.testing.assert_allclose(got[:, 1], 0.0)  # no games left: no form
+
+
+def test_young_steps_widen_young_players_future_seasons_more():
+    from dataclasses import replace
+
+    from dwar.model.talent import EARLY_SEASON_GAMES, season_early
+    from dwar.value.projection import GAMES_PER_SEASON
+
+    rng = np.random.default_rng(0)
+    n = 4000
+    d = replace(draws(n, [10.0, 10.0]), sigma_young=np.full(n, 0.5), ps_career_games_end=np.array([0.0, 200.0]))
+    out = project_talent(d, np.array([0, 1]), np.array([2025, 2025]), np.array([22.0, 30.0]), np.arange(2025, 2027), rng)
+    np.testing.assert_allclose(out[:, :, 0], 10.0)  # the current season never moves
+    expect = 0.5 * np.sqrt((season_early(np.arange(GAMES_PER_SEASON)) ** 2).sum())
+    assert out[:, 0, 1].std() == pytest.approx(expect, rel=0.05)
+    assert out[:, 1, 1].std() < 0.01  # a veteran: steps faded out
+    assert EARLY_SEASON_GAMES == 34.0

@@ -53,11 +53,14 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 
+from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
 from dwar.model.data import ModelData
 
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
 AGE_KNOT = 30.0  # hinge age curve: where the slope may change
+PLATEAU = (24.0, 28.0)  # plateau age curve: rises to the first age, flat to the second, then falls
+AGE_SHIFT_MAX = 5.0  # talent-shifted age curve: the peak moves at most this many years
 KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
 SQRT_PIVOT = 3.0  # sqrt-scale location (about 9 ppg) at which the zero-week log-odds are h0
 
@@ -159,15 +162,197 @@ def _shrunk_coefs(name: str, dim: str, sd: float) -> pt.TensorVariable:
     return pm.Normal(name, 0.0, sd, dims=dim)
 
 
-def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic"):
-    """Age effect from age minus AGE_CENTER (26); works on numpy or tensors."""
+def level_reference(d: ModelData) -> tuple[float, float]:
+    """Mean and SD across players of first in-window season mean sqrt points:
+    the talent-shifted age curve's reference level (shift 0) and unit."""
+    first = d.ps_is_first[d.obs_ps]
+    per = np.bincount(d.ps_player[d.obs_ps[first]], np.sqrt(np.maximum(d.y[first], 0.0)), d.n_players)
+    n = np.bincount(d.ps_player[d.obs_ps[first]], minlength=d.n_players)
+    lv = per[n > 0] / n[n > 0]
+    return float(lv.mean()), float(lv.std())
+
+
+def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic", beta3=0.0):
+    """Age effect from age minus AGE_CENTER (26); works on numpy or tensors.
+    "cubic" adds beta3 * a^3, so the peak and the later decline can differ
+    in shape from a parabola."""
     if curve == "hinge":
         a = age_c - (AGE_KNOT - 26.0)
         return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
-    return beta1 * age_c + beta2 * age_c**2
+    if curve == "plateau":
+        # beta1: yearly rise before PLATEAU[0]; beta2, beta3: linear and
+        # squared fall after PLATEAU[1]; flat between.
+        lo, hi = age_c - (PLATEAU[0] - 26.0), age_c - (PLATEAU[1] - 26.0)
+        before, after = (lo - abs(lo)) / 2, (hi + abs(hi)) / 2
+        return beta1 * before + beta2 * after + beta3 * after**2
+    out = beta1 * age_c + beta2 * age_c**2
+    return out + beta3 * age_c**3 if curve == "cubic" else out
 
 
-def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic") -> pm.Model:
+GROWTH_YEARS = (2, 3)  # career years that add a growth step to the rookie level, kept from then on
+GROWTH_PRIOR = {"sqrt": (0.3, 0.15), "log": (0.1, 0.05), "points": (1.0, 0.5)}  # (step, draft slope) sds
+EFFICIENCY_PRIOR = {"sqrt": 0.3, "log": 0.1}  # sd of the per-player efficiency scale
+GAME_STEP_PRIOR = {"sqrt": 0.1, "log": 0.03}  # sd of the per-game step scale
+EARLY_GAMES = 17.0  # career games over which the early-career boost to game steps fades (by 1/e)
+EARLY_SEASON_GAMES = 34.0  # the same for the offseason step (tau_early)
+
+
+def season_early(career_games):
+    """Early-career weight of an offseason step: 1 for a player with no
+    games yet, 1/e after EARLY_SEASON_GAMES."""
+    return np.exp(-np.asarray(career_games, dtype=float) / EARLY_SEASON_GAMES)
+
+
+def game_step_design(d: ModelData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Career order of the observed games: `order` (obs indices sorted by
+    player-season then week), `first` (a player's first observed game, which
+    takes no step) and `early` (exp(-career games before it / EARLY_GAMES)),
+    both in that order."""
+    order = np.lexsort((d.obs_week, d.obs_ps))
+    player = d.ps_player[d.obs_ps[order]]
+    first = np.r_[True, player[1:] != player[:-1]]
+    early = np.exp(-d.obs_career_games[order] / EARLY_GAMES)
+    return order, first, early
+
+
+def end_talent(likelihood: str, loc: np.ndarray, young_cum: np.ndarray, params: dict) -> np.ndarray:
+    """Expected points per game after each player-season's last game with
+    the young-player steps (`young_cum`) added to the season's location
+    `loc` on the latent scale; arrays broadcast (params per draw)."""
+    if scale_of(likelihood) == "sqrt":
+        loc = np.maximum(loc, 1e-12)
+        latent = loc + np.log(-np.expm1(-loc))  # inverse softplus
+    else:
+        latent = np.log(loc)
+    return talent_from_center(likelihood, link(latent + young_cum, likelihood, lib=np), params, np)
+
+
+def young_cum_last(d: ModelData, young_z: np.ndarray, sigma_young: np.ndarray) -> np.ndarray:
+    """(draws, n_ps) the young-player steps (`young_steps`) summed over the
+    player's career through each player-season's last observed game, from
+    posterior draws (young_z (draws, moves), sigma_young (draws,))."""
+    order, first, _ = game_step_design(d)
+    young = season_early(d.obs_career_games[order])
+    moves = np.flatnonzero(~first)
+    starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
+    ps_sorted = d.obs_ps[order]
+    last = np.r_[ps_sorted[1:] != ps_sorted[:-1], True]  # last game of each player-season
+    out = np.zeros((len(sigma_young), d.n_ps))
+    for k in range(len(sigma_young)):
+        steps = np.zeros(d.n_obs)
+        steps[moves] = sigma_young[k] * young[moves] * young_z[k]
+        c = np.cumsum(steps)
+        out[k, ps_sorted[last]] = (c - c[starts])[last]
+    return out
+
+
+def form_dev_last(d: ModelData, form_z: np.ndarray, rho: np.ndarray, sigma_form: np.ndarray,
+                  lam_form: np.ndarray) -> np.ndarray:
+    """(draws, n_ps) the "form" mode's deviation after each player-season's
+    last observed game, from posterior draws (form_z (draws, n_obs), the
+    rest (draws,)); the same recursion as `build_talent_model`."""
+    order, _, early = game_step_design(d)
+    ps_sorted = d.obs_ps[order]
+    new_season = np.r_[True, ps_sorted[1:] != ps_sorted[:-1]]
+    seg_start = np.maximum.accumulate(np.where(new_season, np.arange(d.n_obs), 0))
+    i = np.arange(d.n_obs) - seg_start
+    length = np.bincount(ps_sorted, minlength=d.n_ps)[ps_sorted]
+    after = (length - 1 - i).astype(float)  # games after this one in its season
+    out = np.zeros((len(rho), d.n_ps))
+    for k in range(len(rho)):  # a draw at a time: form_z can be gigabytes
+        e = sigma_form[k] * np.sqrt(1 - rho[k] ** 2) * np.exp(lam_form[k] * early) * form_z[k, order]
+        out[k] = np.bincount(ps_sorted, weights=e * rho[k] ** after, minlength=d.n_ps)
+    return out
+
+
+def growth_design(career_year: np.ndarray, log_pick_z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(rows, len(GROWTH_YEARS)) indicators that a season is in career year
+    2 or later and 3 or later, and the same times the player's standardized
+    log pick. The growth term is ind @ xi + (ind * pick) @ zeta: year 2 adds
+    one step, year 3 a second, and both persist after, so draft capital can
+    change how much a player is expected to grow. (A further step at year 4
+    was tried; it was not identified apart from the random walk.)"""
+    cy = np.asarray(career_year)
+    ind = np.column_stack([cy >= g for g in GROWTH_YEARS]).astype(float)
+    return ind, ind * np.asarray(log_pick_z)[:, None]
+
+
+def bump_pairs(d: ModelData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(row, earlier-or-same row of the same player, seasons between) for
+    every such pair of player-seasons (season_bump)."""
+    seasons = d.ps_keys["season"].to_numpy().astype(float)
+    dst, src = [], []
+    for i in range(d.n_ps):
+        j = np.arange(d.ps_start[i], i + 1)
+        dst.append(np.full(len(j), i))
+        src.append(j)
+    dst, src = np.concatenate(dst), np.concatenate(src)
+    return dst, src, seasons[dst] - seasons[src]
+
+
+def has_opportunity(d: ModelData) -> bool:
+    return d.x is not None and bool(np.isfinite(d.x).any())
+
+
+def build_talent_model(
+    d: ModelData, likelihood: str = "sqrt_hurdle", age_curve: str = "quadratic",
+    round1: bool = False, growth: bool = False, opportunity: bool = False,
+    opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
+    qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
+    young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
+    season_bump: bool = False, season_bump_first: bool = True,
+) -> pm.Model:
+    """With `round1`, first-round picks get their own step in the rookie
+    prior on top of log pick. With `growth`, career years 2 and 3 each add
+    a lasting growth step whose size may depend on draft capital
+    (`growth_design`). With `opportunity` (needs `d.x`),
+    talent is opportunity talent plus a per-player efficiency: weekly
+    opportunity points observe the first, weekly points the sum. With
+    `opportunity_years` > 0, opportunity points are used only in a player's
+    first that many career years (not for pre-window veterans), and only
+    players with such weeks get an efficiency term.
+
+    With `game_steps` (hurdle likelihoods), talent also moves after every
+    game a player plays: a random-walk step per game whose size is
+    sigma_game * exp(lam_game * early), larger early in a career when
+    lam_game > 0 (`game_step_design`). The season random walk still gives
+    the offseason step; game steps carry over across seasons. `talent` and
+    `loc` stay per player-season (before any in-season steps); the weekly
+    observations see the stepped location.
+
+    `game_mode` "form" makes in-season movement transient instead: each
+    week adds a form deviation that decays by `rho_form` per game and
+    resets each season, dev_j = rho * dev_(j-1) + e_j, with e_j's scale
+    sigma_form * sqrt(1 - rho^2) * exp(lam_form * early). Lasting change still comes from the
+    season random walk. Recent games then count more without a few games'
+    swing being carried into every later season.
+
+    With `qb_drift` (needs `d.ps_qb_end`), each offseason step's mean moves
+    with the rating of the QB in the player's last game of the season
+    before: qb_drift * q + qb_drift_low * min(q - LOW_KNOT, 0), so a bad
+    QB situation can keep pulling talent down beyond the points it already
+    cost (the extra slope below the knot lets the bad side differ).
+
+    With `tau_early` (needs `d.ps_career_games`), the offseason step's
+    scale is tau * exp(lam_tau * exp(-career games before the season /
+    EARLY_SEASON_GAMES)): young players' talent can move more between
+    seasons, so their latest season counts more.
+
+    With `young_steps` ("form" mode), young players' talent also takes a
+    lasting step after each game, sigma_young * exp(-career games /
+    EARLY_SEASON_GAMES), carried into later games and seasons like the
+    "walk" mode's steps; veterans' steps fade to about zero."""
+    use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
+    if use_opp:
+        seen = np.isfinite(d.x)
+        if opportunity_years > 0:
+            cy = np.zeros(d.n_ps) if d.ps_career_year is None else d.ps_career_year
+            cy_obs = cy[d.obs_ps]
+            seen &= (cy_obs >= 1) & (cy_obs <= opportunity_years)
+        seen = np.flatnonzero(seen)
+        has_eff = np.zeros(d.n_players, dtype=bool)
+        has_eff[d.ps_player[d.obs_ps[seen]]] = True
+        use_opp = len(seen) > 0
     coords = {
         "player": list(d.player_ids),
         "player_season": np.arange(d.n_ps),
@@ -175,8 +360,10 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
         "prospect_cov": list(d.prospect_x_names),
         "season_cov": list(d.season_x_names),
         "season_vol_cov": list(d.season_vol_x_names),
+        "growth_year": [str(g) for g in GROWTH_YEARS],
     }
     pr = PRIORS[scale_of(likelihood)]
+    latent_scale = scale_of(likelihood)
     with pm.Model(coords=coords) as model:
         # Rookie prior: draft capital + prospect covariates.
         alpha0 = pm.Normal("alpha0", *pr["alpha0"])
@@ -184,6 +371,14 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
         alpha_undrafted = pm.Normal("alpha_undrafted", 0.0, pr["alpha_undrafted"])
         sigma_rookie = pm.HalfNormal("sigma_rookie", pr["sigma_rookie"])
         rookie_mean = alpha0 + alpha_pick * d.log_pick_z + alpha_undrafted * d.undrafted
+        if round1 and d.round1 is not None and d.round1.any():
+            # The first-round flag minus its straight-line fit on log pick:
+            # the same model as the raw flag, but alpha_round1 no longer
+            # trades off against alpha_pick (raw, the pair mixed slowly).
+            X = np.column_stack([np.ones(d.n_players), d.log_pick_z, d.undrafted])
+            r1 = d.round1 - X @ np.linalg.lstsq(X, d.round1, rcond=None)[0]
+            alpha_round1 = pm.Normal("alpha_round1", 0.0, pr["alpha_pick"])
+            rookie_mean = rookie_mean + alpha_round1 * r1
         if d.prospect_x.shape[1]:
             gamma = _shrunk_coefs("gamma", "prospect_cov", pr["covariate"])
             rookie_mean = rookie_mean + pt.dot(d.prospect_x, gamma)
@@ -194,10 +389,18 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
         if age_curve == "hinge":
             beta1 = pm.Normal("age_slope_pre", 0.0, pr["beta1"])
             beta2 = pm.Normal("age_slope_post", 0.0, pr["beta1"])
+            beta3 = 0.0
+        elif age_curve == "plateau":
+            beta1 = pm.Normal("age_rise", 0.0, pr["beta1"])
+            beta2 = pm.Normal("age_fall", 0.0, pr["beta1"])
+            beta3 = pm.Normal("age_fall2", 0.0, pr["beta2"])
         else:
             beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
             beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
-        age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve)
+            # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
+            beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
+        if age_curve != "talent":
+            age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve, beta3)
 
         # First-season latent talent per player. Rookies are non-centered
         # (little data each); veterans are centered, because their long
@@ -215,6 +418,25 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
             vet_start = pm.Normal("vet_start", mu_vet, sigma_vet, shape=len(vets))
             start = pt.set_subtensor(start[vets], vet_start)
 
+        if age_curve == "talent":
+            # The quadratic's peak moves with the player's level: his first
+            # season's latent less the (unshifted) curve at that age,
+            # standardized across players. age_shift is years per SD.
+            first = np.flatnonzero(d.ps_is_first)
+            a0 = np.zeros(d.n_players)
+            a0[d.ps_player[first]] = d.ps_age_c[first]
+            adj = start - (beta1 * a0 + beta2 * a0**2)
+            # Fixed reference level and SD (from each player's first-season
+            # sqrt points) rather than the parameters' own mean and SD, which
+            # tied every player's start together and broke initialization.
+            ref, ref_sd = level_reference(d)
+            adj_mean = pm.Deterministic("age_ref", pt.as_tensor(ref))
+            adj_sd = pm.Deterministic("age_ref_sd", pt.as_tensor(ref_sd))
+            k_age = pm.Normal("age_shift", 0.0, 1.0)
+            shift = pt.clip(k_age * (adj - adj_mean) / adj_sd, -AGE_SHIFT_MAX, AGE_SHIFT_MAX)
+            a = d.ps_age_c - shift[d.ps_player]
+            age_effect = beta1 * a + beta2 * a**2
+
         # Random walk across a player's seasons from standardized steps.
         tau = pm.HalfNormal("tau", pr["tau"])
         later = np.flatnonzero(~d.ps_is_first)
@@ -225,18 +447,159 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
             if d.season_vol_x.shape[1]:
                 kappa = pm.Normal("kappa", 0.0, KAPPA_SD, dims="season_vol_cov")
                 scale = scale * pt.exp(pt.dot(d.season_vol_x[later], kappa))
-            steps = pt.set_subtensor(steps[later], scale * step_z)
-        csum = pt.cumsum(steps)
-        level = csum - csum[d.ps_start] + steps[d.ps_start]
+            if tau_early and d.ps_career_games is not None:
+                lam_tau = pm.Normal("lam_tau", 0.0, 1.0)
+                scale = scale * pt.exp(lam_tau * season_early(d.ps_career_games[later]))
+            if tau_y3 and d.ps_career_year is not None and d.round1 is not None:
+                # First-round picks' step into career year 3: the year they
+                # most often take over a role or lose it (rookie bust check).
+                y3 = ((d.ps_career_year[later] == 3) & (d.round1[d.ps_player[later]] > 0)).astype(float)
+                lam_y3 = pm.Normal("lam_y3", 0.0, 1.0)
+                scale = scale * pt.exp(lam_y3 * y3)
+            move = scale * step_z
+            if qb_drift and d.ps_qb_end is not None:
+                # Rows are sorted by player then season, so a later season's
+                # previous season is the row before it.
+                q = d.ps_qb_end[later - 1]
+                b_qb = pm.Normal("qb_drift", 0.0, pr["covariate"])
+                b_low = pm.Normal("qb_drift_low", 0.0, pr["covariate"])
+                move = move + b_qb * q + b_low * np.minimum(q - QB_LOW_KNOT, 0.0)
+            steps = pt.set_subtensor(steps[later], move)
+        if season_rho:
+            # Pull toward average between seasons: level_k = m + rho^k (L0 - m)
+            # + sum_j rho^(k - k_j) move_j, k = seasons since the player's first
+            # (actual years, so gaps decay too). As a scaled cumulative sum.
+            # rho = 1 is the random walk.
+            rho = pm.Beta("rho_season", 4.0, 1.0)
+            # "vet": the veterans' starting mean (mu_vet); a free mean traded
+            # off with the age slope and mixed poorly (ar, 2026-11-07).
+            m = pm.Deterministic("level_mean", mu_vet) if season_rho_mean == "vet" else pm.Normal("level_mean", *pr["mu_vet"])
+            seasons = d.ps_keys["season"].to_numpy().astype(float)
+            k = seasons - seasons[d.ps_start]
+            first = d.ps_start == np.arange(d.n_ps)
+            moves = pt.where(first, 0.0, steps)
+            c = pt.cumsum(moves * rho ** (-k))
+            c = c - c[d.ps_start]
+            level = m + rho**k * (steps[d.ps_start] - m) + rho**k * c
+        else:
+            csum = pt.cumsum(steps)
+            level = csum - csum[d.ps_start] + steps[d.ps_start]
 
         latent = level + age_effect
+        if season_bump:
+            # A season's passing bump on top of the lasting level: an AR(1)
+            # across a player's seasons, bump_s = rho^gap bump_prev + e_s,
+            # stationary SD sigma_bump (so the first season's bump has SD
+            # sigma_bump too). Summed as rho^(k_s - k_j) e_j over pairs.
+            rho_b = pm.Beta("rho_bump", 2.0, 2.0)
+            sigma_b = pm.HalfNormal("sigma_bump", pr["tau"])
+            bump_z = pm.Normal("bump_z", 0.0, 1.0, shape=d.n_ps)
+            dst, src, lag = bump_pairs(d)
+            first = d.ps_start == np.arange(d.n_ps)
+            gap = np.where(first, 0.0, np.maximum(d.ps_gap, 1.0))
+            innov = pt.where(first, 1.0, pt.sqrt(1.0 - rho_b ** (2.0 * gap)))
+            if not season_bump_first:
+                # No bump in a player's first season (it is his starting
+                # level; a first-season bump was confounded with the start
+                # SDs, bump fits 2026-11-07). The second season's bump is a
+                # fresh stationary draw.
+                second = ~first & (d.ps_start == np.arange(d.n_ps) - 1)
+                innov = pt.where(first, 0.0, pt.where(second, 1.0, innov))
+            e = sigma_b * innov * bump_z
+            bump = pt.inc_subtensor(pt.zeros(d.n_ps)[dst], rho_b**lag * e[src])
+            latent = latent + bump
         if d.season_x.shape[1]:
             eta = _shrunk_coefs("eta", "season_cov", pr["covariate"])
             latent = latent + pt.dot(d.season_x, eta)
+        if growth and d.ps_career_year is not None:
+            ind, ind_pick = growth_design(d.ps_career_year, d.log_pick_z[d.ps_player])
+            sd_shift, sd_slope = GROWTH_PRIOR[latent_scale]
+            xi = pm.Normal("growth", 0.0, sd_shift, dims="growth_year")
+            zeta = pm.Normal("growth_pick", 0.0, sd_slope, dims="growth_year")
+            latent = latent + pt.dot(ind, xi) + pt.dot(ind_pick, zeta)
+        latent_opp = latent
+        if use_opp:
+            # Efficiency: how far a player's scoring runs above his
+            # opportunity, one value per career, shrunk toward zero.
+            sigma_eff = pm.HalfNormal("sigma_eff", EFFICIENCY_PRIOR[latent_scale])
+            eff_z = pm.Normal("eff_z", 0.0, 1.0, dims="player")
+            latent = latent + (sigma_eff * eff_z * has_eff)[d.ps_player]
         center = link(latent, likelihood)
+        latent_obs = latent[d.obs_ps]
+        # The weekly noise scale (hurdle likelihoods), made here because the
+        # "form" mode scales by it.
+        sigma = pm.HalfNormal("sigma", 2.0) if is_hurdle(likelihood) else None
+        if game_steps and is_hurdle(likelihood) and d.obs_week is not None and game_mode == "walk":
+            order, first, early = game_step_design(d)
+            sigma_game = pm.HalfNormal("sigma_game", GAME_STEP_PRIOR[latent_scale])
+            lam_game = pm.Normal("lam_game", 0.0, 1.0)
+            moves = np.flatnonzero(~first)
+            game_z = pm.Normal("game_z", 0.0, 1.0, shape=len(moves))
+            gsteps = pt.zeros(d.n_obs)
+            gsteps = pt.set_subtensor(gsteps[moves], sigma_game * pt.exp(lam_game * early[moves]) * game_z)
+            gsum = pt.cumsum(gsteps)
+            starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
+            within = pt.zeros(d.n_obs)
+            within = pt.set_subtensor(within[order], gsum - gsum[starts])
+            latent_obs = latent_obs + within
+        elif game_steps and is_hurdle(likelihood) and d.obs_week is not None and game_mode == "form":
+            order, _, early = game_step_design(d)
+            ps_sorted = d.obs_ps[order]
+            new_season = np.r_[True, ps_sorted[1:] != ps_sorted[:-1]]
+            seg_start = np.maximum.accumulate(np.where(new_season, np.arange(d.n_obs), 0))
+            i = np.arange(d.n_obs) - seg_start  # game index within the season
+            seg = np.cumsum(new_season) - 1     # season segment of each sorted game
+            # rho well below ~0.5 makes form plain week-to-week noise, which
+            # the weekly likelihood already has: a 2023 holdout chain stuck in
+            # that mode (rho 0.42, form SD doubled, weekly SD shrunk, 838
+            # divergences). Beta(8, 2) keeps rho mostly above 0.6; fits put it
+            # at 0.75-0.83.
+            if form_rho is None:
+                rho = pm.Beta("rho_form", 8.0, 2.0)
+            else:
+                # Held fixed (config `form_rho`): estimated, the decay rate
+                # mixed slowly on 2013-2026 WR (a chain wandered, R-hat 1.15).
+                rho = pm.Deterministic("rho_form", pt.as_tensor_variable(float(form_rho)))
+            # Form's spread is a fraction of the weekly noise's (`sigma`,
+            # below): otherwise the fit has a second mode where fast-fading
+            # "form" stands in for weekly noise (rho ~0.3, form SD ~1, weekly
+            # SD halved), and a chain stuck there failed the 2026 WR fit.
+            # Fits put the ratio near 0.45.
+            form_ratio = pm.Beta("form_ratio", 2.0, 2.0)
+            sigma_form = pm.Deterministic("sigma_form", form_ratio * sigma)
+            lam_form = pm.Normal("lam_form", 0.0, 1.0)
+            form_z = pm.Normal("form_z", 0.0, 1.0, shape=d.n_obs)
+            # sigma_form is the form term's long-run SD; each week's shock is
+            # scaled by sqrt(1 - rho^2) so rho and sigma_form trade off less
+            # (the plain shock scale mixed slowly against rho).
+            e = sigma_form * pt.sqrt(1 - rho**2) * pt.exp(lam_form * early) * form_z
+            # dev_j = sum_{k<=j} rho^(j-k) e_k within the season: lay each
+            # season's shocks out as a row and multiply by the lower-triangular
+            # decay matrix. (A cumulative sum scaled by rho^-j is cheaper but
+            # overflows when the sampler tries a small rho: the 2023 holdout
+            # fit diverged that way.)
+            n_len = int(i.max()) + 1
+            lag = np.arange(n_len)[:, None] - np.arange(n_len)[None, :]
+            decay = pt.switch(lag >= 0, rho ** np.maximum(lag, 0), 0.0)
+            shocks = pt.zeros((int(seg.max()) + 1, n_len))
+            shocks = pt.set_subtensor(shocks[seg, i], e)
+            dev_sorted = pt.dot(shocks, decay.T)[seg, i]
+            dev = pt.zeros(d.n_obs)
+            dev = pt.set_subtensor(dev[order], dev_sorted)
+            latent_obs = latent_obs + dev
+            if young_steps:
+                _, first, _ = game_step_design(d)
+                young = season_early(d.obs_career_games[order])
+                sigma_young = pm.HalfNormal("sigma_young", GAME_STEP_PRIOR[latent_scale])
+                moves = np.flatnonzero(~first)
+                young_z = pm.Normal("young_z", 0.0, 1.0, shape=len(moves))
+                ysteps = pt.set_subtensor(pt.zeros(d.n_obs)[moves], sigma_young * young[moves] * young_z)
+                ysum = pt.cumsum(ysteps)
+                starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
+                latent_obs = latent_obs + pt.set_subtensor(pt.zeros(d.n_obs)[order], ysum - ysum[starts])
+        loc_obs = link(latent_obs, likelihood)
 
         if is_hurdle(likelihood):
-            sigma = pm.HalfNormal("sigma", 2.0)
             nu = pm.Deterministic("nu", 2.0 + pm.Gamma("nu_minus_2", 2.0, 0.1))
             h0 = pm.Normal("h0", 1.0, 1.5)
             h1 = pm.HalfNormal("h1", 3.0)  # zero weeks get rarer as talent rises
@@ -244,13 +607,25 @@ def build_talent_model(d: ModelData, likelihood: str = "sqrt_hurdle", age_curve:
             params = {"sigma": sigma, "nu": nu, "h0": h0, "h1": h1, "zero_value": d.zero_week_mean}
             pm.Deterministic("talent", talent_from_center(likelihood, loc, params, pt), dims="player_season")
             pos = d.y > 0
-            pm.Bernoulli("scored", p=nonzero_prob(loc[d.obs_ps], h0, h1), observed=pos.astype(np.int64), dims="obs")
+            pm.Bernoulli("scored", p=nonzero_prob(loc_obs, h0, h1), observed=pos.astype(np.int64), dims="obs")
             # Scoring weeks: y = Z^2 with Z ~ StudentT(nu, loc, sigma). The
             # density of y sums both roots +-sqrt(y); the Jacobian 1/(2 sqrt y)
             # is constant in the parameters and dropped.
             z = np.sqrt(d.y[pos])
-            t = pm.StudentT.dist(nu=nu, mu=loc[d.obs_ps[pos]], sigma=sigma)
+            t = pm.StudentT.dist(nu=nu, mu=loc_obs[pos], sigma=sigma)
             pm.Potential("fpts", pt.sum(pt.logaddexp(pm.logp(t, z), pm.logp(t, -z))))
+            if use_opp:
+                # Weekly opportunity points on the sqrt scale, centered on
+                # the opportunity part of the same location (plus an offset,
+                # since points and opportunity points differ on average).
+                loc_opp = link(latent_opp, likelihood)
+                delta_x = pm.Normal("delta_x", 0.0, 0.5)
+                sigma_x = pm.HalfNormal("sigma_x", 1.0)
+                nu_x = pm.Deterministic("nu_x", 2.0 + pm.Gamma("nu_x_minus_2", 2.0, 0.1))
+                pm.Potential("xfpts", pt.sum(pm.logp(
+                    pm.StudentT.dist(nu=nu_x, mu=loc_opp[d.obs_ps[seen]] + delta_x, sigma=sigma_x),
+                    np.sqrt(np.maximum(d.x[seen], 0.0)),
+                )))
         else:
             talent = pm.Deterministic("talent", center, dims="player_season")
             sigma = pm.HalfNormal("sigma", 10.0)

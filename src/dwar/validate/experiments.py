@@ -54,6 +54,8 @@ def _all(seasons: tuple[int, ...], group: str | None = None, **kw) -> Run:
     return Run(seasons, level, range_, **kw)
 
 
+FINAL_LEVEL = {"QB": ["qb_starter"], "RB": ["competition", "vacated", "rookie_capital"]}  # run F's factors
+
 RUNS: dict[str, Run] = {
     "step5": Run(DEV_SEASONS),  # the step 5 model, re-run on today's data for paired comparisons
     "A": _all(DEV_SEASONS),
@@ -72,6 +74,33 @@ RUNS: dict[str, Run] = {
     "C_nospread": _all(DEV_SEASONS, value={"short_by_role": ["QB"], "calibrate_spread": []}, fits_from="A"),
     "C_hinge": _all(DEV_SEASONS, model={"positions": ["QB"], "age_curve": {"QB": "hinge"}},
                     value={"short_by_role": ["QB"]}),
+    # Usage and early-career prior plan. U_base is the current model; U_A adds
+    # opportunity points + efficiency (RB/WR/TE), the rookie first-round step
+    # and career-year growth scaled by draft capital (all positions). QB
+    # opportunity was dropped: QB dropbacks are valued alike, so QB talent
+    # moved almost wholly into efficiency, the veteran spread collapsed and
+    # the 2012 QB fit failed its checks (30 divergences, R-hat 1.05).
+    "U_base": Run(DEV_SEASONS, level=FINAL_LEVEL),
+    "U_A": Run(DEV_SEASONS, level=FINAL_LEVEL, model={
+        "opportunity": ["RB", "WR", "TE"], "rookie_round1": ["QB", "RB", "WR", "TE"],
+        "growth": ["QB", "RB", "WR", "TE"],
+    }),
+    # Screening (even seasons 2012-2018) put U_A behind the current model at
+    # RB, WR and TE on MAE and floored log score, with wider forecasts, while
+    # its growth terms removed the second-year under-forecast. U_G keeps only
+    # the early-career terms to separate the two.
+    "U_G": Run(DEV_SEASONS, level=FINAL_LEVEL, model={
+        "rookie_round1": ["QB", "RB", "WR", "TE"], "growth": ["QB", "RB", "WR", "TE"],
+    }),
+    # U_G edged the current model at every position. U_E adds opportunity
+    # back for career years 1-2 only, where a few games of points say least.
+    "U_E": Run(DEV_SEASONS, level=FINAL_LEVEL, model={
+        "rookie_round1": ["QB", "RB", "WR", "TE"], "growth": ["QB", "RB", "WR", "TE"],
+        "opportunity": ["RB", "WR", "TE"], "opportunity_years": 2,
+    }),
+    # Screening: U_E trailed U_G at RB, WR and TE (floored log score -0.02 to
+    # -0.06, MAE worse). It helped rookie forecasts a little but hurt
+    # forecasts after a season of points, so opportunity is dropped.
 }
 
 

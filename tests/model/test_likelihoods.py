@@ -5,7 +5,12 @@ import numpy as np
 import pytest
 
 from dwar.model.talent import (
-    LIKELIHOODS, link, nonzero_prob, scale_of, simulate_weeks, talent_from_center,
+    LIKELIHOODS,
+    link,
+    nonzero_prob,
+    scale_of,
+    simulate_weeks,
+    talent_from_center,
 )
 
 from .simulate import LIKELIHOOD_TRUTH
@@ -70,3 +75,48 @@ def test_log_link_makes_a_latent_step_proportional():
         x = np.log(level)
         ratio = link(np.array([x + step]), "sqrt_hurdle_log", lib=np) / link(np.array([x]), "sqrt_hurdle_log", lib=np)
         assert ratio[0] == pytest.approx(np.exp(step))
+
+
+def test_form_dev_last_matches_the_recursion():
+    from types import SimpleNamespace
+
+    from dwar.model.talent import EARLY_GAMES, form_dev_last
+
+    rng = np.random.default_rng(0)
+    lens = [3, 1, 5]
+    obs_ps = np.repeat(np.arange(3), lens)
+    shuffle = rng.permutation(len(obs_ps))  # obs need not be in game order
+    weeks = np.concatenate([np.arange(1, n + 1) for n in lens])
+    cg = np.concatenate([np.arange(n) + 10 * p for p, n in enumerate(lens)]).astype(float)
+    d = SimpleNamespace(obs_ps=obs_ps[shuffle], obs_week=weeks[shuffle], obs_career_games=cg[shuffle],
+                        ps_player=np.array([0, 0, 1]), n_obs=len(obs_ps), n_ps=3)
+    z = rng.standard_normal((2, len(obs_ps)))
+    rho, sig, lam = np.array([0.6, 0.9]), np.array([0.3, 0.5]), np.array([0.2, -0.1])
+    got = form_dev_last(d, z, rho, sig, lam)
+    for k in range(2):
+        for p in range(3):
+            dev = 0.0
+            for j in np.flatnonzero(obs_ps == p):
+                o = np.flatnonzero(shuffle == j)[0]  # z is indexed by the shuffled obs
+                e = sig[k] * np.sqrt(1 - rho[k] ** 2) * np.exp(lam[k] * np.exp(-cg[j] / EARLY_GAMES)) * z[k, o]
+                dev = rho[k] * dev + e
+            assert got[k, p] == pytest.approx(dev)
+
+
+def test_young_cum_last_sums_steps_through_each_season_and_carries_over():
+    from types import SimpleNamespace
+
+    from dwar.model.talent import season_early, young_cum_last
+
+    lens = [3, 1, 5]  # player 0: seasons 0 and 1; player 1: season 2
+    obs_ps = np.repeat(np.arange(3), lens)
+    weeks = np.concatenate([np.arange(1, n + 1) for n in lens])
+    cg = np.array([0, 1, 2, 3, 0, 1, 2, 3, 4], float)
+    d = SimpleNamespace(obs_ps=obs_ps, obs_week=weeks, obs_career_games=cg, ps_player=np.array([0, 0, 1]),
+                        n_obs=len(obs_ps), n_ps=3)
+    z = np.array([[1.0, 2.0, 3.0, 1.0, 1.0, 1.0, 1.0]])  # one per non-first game, in game order
+    got = young_cum_last(d, z, np.array([0.5]))[0]
+    w = 0.5 * season_early(cg)
+    assert got[0] == pytest.approx(w[1] * 1 + w[2] * 2)
+    assert got[1] == pytest.approx(got[0] + w[3] * 3)  # carried into the next season
+    assert got[2] == pytest.approx(w[5:].sum())

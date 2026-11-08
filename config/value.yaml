@@ -1,6 +1,7 @@
 # Value layer: talent -> DWAR (see src/dwar/value/dwar.py).
 draws: 1000              # posterior draws carried through projection
-horizon_seasons: 5       # full seasons after the current one (decision 3: plus the rest of this season)
+horizon_seasons: 5       # full seasons after the current one, plus the rest of this one (ben, 2026-11-07: tested 5 out for WRs; was 3)
+qb_fade: [WR]            # later seasons: WR QB-drift rating fades toward average (keeps ~26% a season on); ties carry-forward on tests, ben 2026-11-05
 replacement_seasons: 3   # recent complete seasons whose player pool sets replacement level
 pool_min_games: 4        # games for a player-season to count in that pool and in team-score SD
 calibrate_spread: [QB]   # widen QB ranges by past misses (value/spread.py); step 5 found them too narrow

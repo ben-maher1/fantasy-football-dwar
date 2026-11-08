@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -55,12 +55,32 @@ class ScoringConfig(_Frozen):
     rec_bonus_by_position: dict[str, float] = Field(default_factory=dict)
 
 
+class RosterSettings(_Frozen):
+    """Active roster spots (starters + bench) and how a typical team splits
+    them by position. Taxi and IR spots hold rookies and injured players and
+    are left out. With these set, value is measured against the waiver wire
+    and counts only the weeks a player would be in a lineup."""
+
+    bench: int = Field(ge=0)
+    by_position: dict[str, int]
+
+
 class LeagueFormat(_Frozen):
     name: str
     scoring: str
     teams: int = Field(gt=1)
     lineup: dict[str, int]
     discount: float = Field(default=0.85, gt=0, le=1)
+    roster: RosterSettings | None = None
+
+    @model_validator(mode="after")
+    def _roster_fits(self) -> LeagueFormat:
+        if self.roster is not None:
+            active = sum(self.lineup.values()) + self.roster.bench
+            if sum(self.roster.by_position.values()) != active:
+                raise ValueError(f"roster.by_position sums to {sum(self.roster.by_position.values())}, "
+                                 f"but starters + bench = {active}")
+        return self
 
 
 class DraftDates(_Frozen):
@@ -105,7 +125,28 @@ class ModelConfig(_Frozen):
     situation_level: dict[str, tuple[str, ...]] = {}
     situation_range: dict[str, tuple[str, ...]] = {}
     # Per-position age curve (model/talent.py): quadratic (default) or hinge.
-    age_curve: dict[str, Literal["quadratic", "hinge"]] = {}
+    age_curve: dict[str, Literal["quadratic", "hinge", "cubic", "plateau", "talent"]] = {}
+    # Usage and early-career terms (model/talent.py), each a list of positions:
+    # weekly opportunity points + per-player efficiency, a first-round step in
+    # the rookie prior, and career-year growth scaled by draft capital.
+    opportunity: tuple[str, ...] = ()
+    opportunity_years: int = 0  # >0: opportunity points only in career years 1..n
+    rookie_round1: tuple[str, ...] = ()
+    growth: tuple[str, ...] = ()
+    game_steps: tuple[str, ...] = ()  # talent also steps after every game (model/talent.py)
+    game_mode: str = "walk"           # "walk": lasting per-game steps; "form": decaying in-season form
+    qb_drift: tuple[str, ...] = ()    # offseason talent drift with the QB rating (model/talent.py)
+    form_rho: float | None = None      # hold the form decay rate fixed ("form" mode); None = estimate it
+    season_rho: tuple[str, ...] = ()  # talent pulled toward average between seasons (rho_season; random walk otherwise)
+    season_rho_mean: Literal["free", "vet"] = "free"  # what season_rho pulls toward
+    season_bump: tuple[str, ...] = ()  # a fading per-season bump on top of the lasting level (rho_bump, sigma_bump)
+    season_bump_first: bool = True     # False: no bump in a player's first season (starts in his second)
+    tau_y3: tuple[str, ...] = ()      # first-round picks' larger offseason step into career year 3 (lam_y3)
+    tau_early: tuple[str, ...] = ()   # offseason talent step larger early in a career (model/talent.py lam_tau)
+    injury_exits: tuple[str, ...] = ()  # leave injury-exit games out of the fit (features/exits.py)
+    young_steps: tuple[str, ...] = ()  # lasting per-game talent steps for young players ("form" mode)
+    first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one
+    draws_by_position: dict[str, int] = {}  # sampler draws where a position needs more than `sampler.draws`
 
     def likelihood_for(self, position: str) -> str:
         return self.likelihood_by_position.get(position, self.likelihood)
@@ -123,6 +164,7 @@ def uses_situation(cfg: ModelConfig) -> bool:
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
+    qb_fade: tuple[str, ...] = ()            # positions whose QB-drift rating fades toward average in later seasons
     replacement_seasons: int = Field(gt=0)   # recent complete seasons that set replacement level
     pool_min_games: int = Field(ge=1)        # games for a player-season to count in that pool
     calibrate_spread: tuple[str, ...] = ()   # positions whose backtest learns a spread factor
@@ -146,6 +188,19 @@ def load_scoring(name: str) -> ScoringConfig:
 
 def load_format(name: str) -> LeagueFormat:
     return LeagueFormat(**_read_yaml(config_dir() / "formats" / f"{name}.yaml"))
+
+
+def load_out_for_season(season: int, news_as_of: date) -> frozenset[str]:
+    """Player ids known (by `news_as_of`) to miss the rest of `season`
+    (config/out_for_season.yaml)."""
+    path = REPO_ROOT / "config" / "out_for_season.yaml"
+    if not path.exists():
+        return frozenset()
+    rows = (yaml.safe_load(path.read_text()) or {}).get("players") or []
+    return frozenset(
+        str(r["player_id"]) for r in rows
+        if int(r["season"]) == season and date.fromisoformat(str(r["known_on"])) <= news_as_of
+    )
 
 
 def load_draft_dates() -> DraftDates:
