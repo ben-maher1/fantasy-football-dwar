@@ -90,6 +90,7 @@ class Settings:
     level_mean: np.ndarray | None = None
     rho_bump: np.ndarray | None = None      # fading season bump (season_bump): AR(1) rate and stationary SD
     sigma_bump: np.ndarray | None = None
+    bump_first: bool = True                 # False: no bump in a player's first season
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
@@ -119,14 +120,18 @@ class Settings:
 
     def bump_start(self, draw: np.ndarray, rng: np.random.Generator) -> np.ndarray:
         """A first season's bump (zero without season_bump)."""
-        if self.rho_bump is None:
+        if self.rho_bump is None or not self.bump_first:
             return np.zeros(len(draw))
         return self.sigma_bump[draw] * rng.standard_normal(len(draw))
 
-    def bump_next(self, b: np.ndarray, draw: np.ndarray, years: float, rng: np.random.Generator) -> np.ndarray:
-        """The bump `years` seasons on: faded by rho_bump^years plus a fresh part."""
+    def bump_next(self, b: np.ndarray, draw: np.ndarray, years: float, rng: np.random.Generator,
+                  from_first: bool = False) -> np.ndarray:
+        """The bump `years` seasons on: faded by rho_bump^years plus a fresh
+        part (a fresh stationary draw out of a bump-free first season)."""
         if self.rho_bump is None:
             return b
+        if from_first and not self.bump_first:
+            return self.sigma_bump[draw] * rng.standard_normal(len(b))
         r = self.rho_bump[draw] ** max(years, 1.0)
         return r * b + self.sigma_bump[draw] * np.sqrt(1.0 - r**2) * rng.standard_normal(len(b))
 
@@ -150,7 +155,7 @@ class Settings:
 
     @classmethod
     def from_posterior(cls, d: ModelData, posterior, likelihood: str, draws: np.ndarray,
-                       fade_qb: bool = False) -> Settings:
+                       fade_qb: bool = False, bump_first: bool = True) -> Settings:
         post = posterior["posterior"]
 
         def take(name: str, default: float | None = None, width: int | None = None) -> np.ndarray:
@@ -198,6 +203,7 @@ class Settings:
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
             rho_bump=take("rho_bump") if "rho_bump" in post else None,
             sigma_bump=take("sigma_bump") if "rho_bump" in post else None,
+            bump_first=bump_first,
         )
 
 
@@ -311,6 +317,7 @@ class Filter:
         self.x = start - _age_effect(s, pl_.age_c[0], self.draw, self.shift)
         self.dev = np.zeros(len(self.draw))  # in-season form ("form" mode); resets each season
         self.bump = s.bump_start(self.draw, rng)  # this season's passing bump (season_bump)
+        self.in_first = True                      # still in the player's first season
         self.logw = np.zeros(len(self.draw))
 
     def offseason(self, gap: float, q: float = 0.0, career_games: float = 0.0, career_year: int = 0) -> None:
@@ -319,7 +326,8 @@ class Filter:
         self.x = (self.s.revert(self.x, self.draw, max(gap, 1.0)) + self.s.drift(q, self.draw)
                   + self.s.step_sd(self.draw, career_games, career_year, self.p.round1) * np.sqrt(max(gap, 1.0)) * self.rng.standard_normal(len(self.x)))
         self.dev = np.zeros(len(self.x))
-        self.bump = self.s.bump_next(self.bump, self.draw, gap, self.rng)
+        self.bump = self.s.bump_next(self.bump, self.draw, gap, self.rng, self.in_first)
+        self.in_first = False
 
     def before_game(self, first_in_window: bool, career_games: float) -> None:
         self.x, self.dev = _game_move(self.s, self.x, self.dev, self.draw, first_in_window, career_games, self.rng)
@@ -385,6 +393,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
     out: list[np.ndarray | None] = []
     cg = float(p.career_games[j][done]) if done < len(p.career_games[j]) else float(p.career_games[j][-1] + 1)
     prev_season = p.seasons[j]
+    in_first = f.in_first
     # Later seasons' QBs are unknown: the current one is carried forward,
     # or faded toward average (Settings.fade).
     q = p.qb_before(j, done)
@@ -396,7 +405,8 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
             cy_new = p.career_year[j] + h if p.career_year[j] > 0 else 0
             x = s.revert(x, draw, season - prev_season) + s.drift(q, draw, h) + s.step_sd(draw, cg, cy_new, p.round1) * np.sqrt(season - prev_season) * rng.standard_normal(r)
             dev = np.zeros(r)
-            bump = s.bump_next(bump, draw, season - prev_season, rng)
+            bump = s.bump_next(bump, draw, season - prev_season, rng, in_first)
+            in_first = False
         if not n_games:
             out.append(None)
             continue

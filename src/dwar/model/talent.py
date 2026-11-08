@@ -300,7 +300,7 @@ def build_talent_model(
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
-    season_bump: bool = False,
+    season_bump: bool = False, season_bump_first: bool = True,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -498,6 +498,13 @@ def build_talent_model(
             first = d.ps_start == np.arange(d.n_ps)
             gap = np.where(first, 0.0, np.maximum(d.ps_gap, 1.0))
             innov = pt.where(first, 1.0, pt.sqrt(1.0 - rho_b ** (2.0 * gap)))
+            if not season_bump_first:
+                # No bump in a player's first season (it is his starting
+                # level; a first-season bump was confounded with the start
+                # SDs, bump fits 2026-11-07). The second season's bump is a
+                # fresh stationary draw.
+                second = ~first & (d.ps_start == np.arange(d.n_ps) - 1)
+                innov = pt.where(first, 0.0, pt.where(second, 1.0, innov))
             e = sigma_b * innov * bump_z
             bump = pt.inc_subtensor(pt.zeros(d.n_ps)[dst], rho_b**lag * e[src])
             latent = latent + bump

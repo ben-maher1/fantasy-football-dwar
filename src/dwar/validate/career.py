@@ -152,6 +152,10 @@ VARIANTS: dict[str, dict] = {
     # player's lasting level down).
     "bump": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
              "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,)},
+    # bump with no bump in a player's first season (bump's fits failed:
+    # sigma_rookie vs the first-season bump; ben, 2026-11-07).
+    "bump2": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,), "season_bump_first": False},
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before
@@ -209,7 +213,8 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
         log.info("%s fit: passed=%s runtime %.0fs %s", name, diag.passed, runtime, diag.failures)
     total = posterior["posterior"].sizes["chain"] * posterior["posterior"].sizes["draw"]
     draws = np.random.default_rng(seed).choice(total, N_SETTINGS, replace=False)
-    settings = Settings.from_posterior(d, posterior, cfg.likelihood_for(POSITION), np.sort(draws), fade_qb=fade)
+    settings = Settings.from_posterior(d, posterior, cfg.likelihood_for(POSITION), np.sort(draws), fade_qb=fade,
+                                     bump_first=cfg.season_bump_first)
     exits = POSITION in cfg.injury_exits
     if exits:
         # Injury exits are left out of the fit; forecasts add them back at
