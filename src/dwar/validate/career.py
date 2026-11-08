@@ -29,6 +29,8 @@ import xarray as xr
 from dwar.config import data_dir, load_model_config, load_scoring
 from dwar.features.asof import RawTables, asof_snapshot
 from dwar.features.player_tables import build_player_tables
+from dwar.features.prospect import METRICS as PROSPECT_METRICS
+from dwar.features.prospect import prospect_table
 from dwar.model.data import build_model_data
 from dwar.model.diagnostics import check_fit
 from dwar.model.fit import position_data, sample
@@ -166,6 +168,12 @@ VARIANTS: dict[str, dict] = {
     # switching DWAR's horizon to 5 seasons).
     "young5": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
                "fade_qb": True, "young_steps": (POSITION,), "horizon": 5, "discount": 0.8},
+    # College prospect profiles in the rookie prior (plan "prospect profiles
+    # for young WRs", ben 2026-11-08), on top of young5. Leave-one-out
+    # variants "prospect-<metric>" are added below.
+    "prospect": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                 "fade_qb": True, "young_steps": (POSITION,), "horizon": 5, "discount": 0.8,
+                 "prospect": {POSITION: PROSPECT_METRICS}},
     "plateau": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
                 "fade_qb": True, "young_steps": (POSITION,), "age_curve": {POSITION: "plateau"}},
     "agetalent": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
@@ -173,6 +181,11 @@ VARIANTS: dict[str, dict] = {
     "cubic": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "age_curve": {POSITION: "cubic"}},
 }
+
+
+for _m in PROSPECT_METRICS:
+    VARIANTS[f"prospect-{_m}"] = VARIANTS["prospect"] | {
+        "prospect": {POSITION: tuple(x for x in PROSPECT_METRICS if x != _m)}}
 
 
 def root(name: str, period: str = "dev") -> Path:
@@ -200,7 +213,10 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     out = root(name, period)
     out.mkdir(parents=True, exist_ok=True)
     fit_tables = _tables(fit_as_of)
-    d = position_data(fit_tables, POSITION, cfg)
+    # Prospect metrics use only college seasons before each player's draft;
+    # their age reference is built from players drafted by the fit date.
+    prospect = prospect_table(fit_as_of, (POSITION,)) if cfg.prospect.get(POSITION) else None
+    d = position_data(fit_tables, POSITION, cfg, prospect=prospect)
     nc = out / "fit.nc"
     if reuse and not nc.exists():
         # Same model as `reuse`: only the step-through differs.
@@ -230,6 +246,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     full = build_model_data(
         _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
+        prospect_covariates=None if prospect is None else prospect.select("player_id", *cfg.prospect[POSITION]),
     )
     if full.prospect_x_names != settings.prospect_names:
         raise ValueError(f"prospect columns differ: {full.prospect_x_names} vs {settings.prospect_names}")
