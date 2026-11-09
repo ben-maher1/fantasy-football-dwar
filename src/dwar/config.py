@@ -140,6 +140,7 @@ class ModelConfig(_Frozen):
     season_rho: tuple[str, ...] = ()  # talent pulled toward average between seasons (rho_season; random walk otherwise)
     season_rho_mean: Literal["free", "vet"] = "free"  # what season_rho pulls toward
     season_bump: tuple[str, ...] = ()  # a fading per-season bump on top of the lasting level (rho_bump, sigma_bump)
+    usage: tuple[str, ...] = ()        # recent carry share + snap-share change shift each game (gamma_usage)
     rookie_fluke: tuple[str, ...] = ()  # a rookie season's own boost/dip that does not carry into year 2 (sigma_fluke)
     season_bump_first: bool = True     # False: no bump in a player's first season (starts in his second)
     tau_y3: tuple[str, ...] = ()      # first-round picks' larger offseason step into career year 3 (lam_y3)

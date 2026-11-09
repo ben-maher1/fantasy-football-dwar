@@ -90,6 +90,7 @@ class Settings:
     level_mean: np.ndarray | None = None
     rho_bump: np.ndarray | None = None      # fading season bump (season_bump): AR(1) rate and stationary SD
     sigma_bump: np.ndarray | None = None
+    gamma_usage: np.ndarray | None = None   # (draws, 2) usage effects (usage); None = off
     sigma_fluke: np.ndarray | None = None   # rookie season's own non-lasting boost/dip (rookie_fluke); None = off
     bump_first: bool = True                 # False: no bump in a player's first season
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
@@ -205,6 +206,7 @@ class Settings:
             rho_bump=take("rho_bump") if "rho_bump" in post else None,
             sigma_bump=take("sigma_bump") if "rho_bump" in post else None,
             sigma_fluke=take("sigma_fluke") if "sigma_fluke" in post else None,
+            gamma_usage=take("gamma_usage", width=2) if "gamma_usage" in post else None,
             bump_first=bump_first,
         )
 
@@ -269,6 +271,7 @@ class Player:
     career_games: list[np.ndarray]   # career games before each of those weeks
     qb: list[np.ndarray]             # each week's QB rating (0 when unknown)
     exits: list[np.ndarray] | None = None  # each week: an injury exit (scored, but not used to update)
+    usage: list[np.ndarray] | None = None  # each week's (n, 2) usage from the season's earlier games (data.usage_design)
 
     def qb_before(self, j: int, k: int) -> float:
         """The QB rating in the last game before game k of season j (0 before any)."""
@@ -294,6 +297,7 @@ def players(d: ModelData) -> list[Player]:
             career_games=[d.obs_career_games[order][obs_ps == i] for i in ps],
             qb=[(d.obs_qb[order] if d.obs_qb is not None else np.zeros(d.n_obs))[obs_ps == i] for i in ps],
             exits=None if d.obs_exit is None else [d.obs_exit[order][obs_ps == i] for i in ps],
+            usage=None if d.obs_usage is None else [d.obs_usage[order][obs_ps == i] for i in ps],
         ))
     return out
 
@@ -341,8 +345,13 @@ class Filter:
         p = self.p
         return _age_effect(self.s, p.age_c[j], self.draw, self.shift) + _growth(self.s, p.career_year[j], p.pick_z)[self.draw]
 
-    def update(self, j: int, y: float) -> None:
-        self.logw = self.logw + _loglik(self.s, self.x + self.bump + self.fluke + self.dev + self.season_shift(j), y, self.draw)
+    def usage_shift(self, j: int, k: int) -> np.ndarray | float:
+        """Game k of season j's usage effect per particle (0 without usage)."""
+        return _usage_shift(self.s, self.p, j, k, self.draw)
+
+    def update(self, j: int, y: float, k: int = 0) -> None:
+        self.logw = self.logw + _loglik(self.s, self.x + self.bump + self.fluke + self.dev + self.season_shift(j)
+                                        + self.usage_shift(j, k), y, self.draw)
         w = self.logw.reshape(self.s.n, self.m)
         w = np.exp(w - w.max(axis=1, keepdims=True))
         w = w / w.sum(axis=1, keepdims=True)
@@ -372,6 +381,15 @@ class Filter:
         # The rookie fluke rides on the bump slot: both are this season's
         # non-lasting part (only one is on in any fit).
         return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift, self.bump[idx] + self.fluke[idx]
+
+
+def _usage_shift(s: Settings, p: Player, j: int, k: int, draw: np.ndarray) -> np.ndarray | float:
+    """Usage effect for game k of season j: known from the season's earlier
+    games; games past the last played hold the latest known value."""
+    if s.gamma_usage is None or p.usage is None or not len(p.usage[j]):
+        return 0.0
+    u = p.usage[j][min(k, len(p.usage[j]) - 1)]
+    return s.gamma_usage[draw] @ u
 
 
 def _game_move(s: Settings, x: np.ndarray, dev: np.ndarray, draw: np.ndarray, first_in_window: bool,
@@ -422,6 +440,10 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
         age_c = p.age_c[j] + h
         cy = p.career_year[j] + h if p.career_year[j] > 0 else 0
         shift = _age_effect(s, age_c, draw, ashift) + _growth(s, cy, p.pick_z)[draw]
+        if h == 0:
+            # This season: usage as of the next game, held for the rest of
+            # it (later games' usage is unknown). Later seasons: none.
+            shift = shift + _usage_shift(s, p, j, done, draw)
         lat = np.empty((r, n_games))
         for k in range(n_games):
             x, dev = _game_move(s, x, dev, draw, h == 0 and k == 0 and done == 0 and j == 0, cg, rng)
@@ -486,6 +508,6 @@ def step_through(
                                             "pit": pit(tot, a_tot)})
                 if k < len(g) and not (p.exits is not None and p.exits[j][k]):
                     f.before_game(not started, float(p.career_games[j][k]))
-                    f.update(j, float(g[k]))
+                    f.update(j, float(g[k]), k)
                     started = True
     return pl.DataFrame(rows)

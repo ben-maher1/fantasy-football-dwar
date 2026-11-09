@@ -80,6 +80,10 @@ VARIANTS: dict[str, dict] = {
     "rb_base": {"game_steps": (), "qb_drift": (), "young_steps": (), "sampler": {"draws": 3500}},
     "rb_career": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                   "sampler": {"draws": 3500}},
+    # RB step 3: + recent carry share and snap-share change (step 2 found
+    # both predict rb_career's misses in all four periods).
+    "rb_usage": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                 "usage": (POSITION,), "sampler": {"draws": 3500}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes

@@ -301,6 +301,7 @@ def build_talent_model(
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
     season_bump: bool = False, season_bump_first: bool = True, rookie_fluke: bool = False,
+    usage: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -605,6 +606,12 @@ def build_talent_model(
                 ysum = pt.cumsum(ysteps)
                 starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
                 latent_obs = latent_obs + pt.set_subtensor(pt.zeros(d.n_obs)[order], ysum - ysum[starts])
+        if usage and d.obs_usage is not None:
+            # Recent usage known before each game (data.usage_design): carry
+            # share over the last 3 games and the change in snap share
+            # (RB plan step 3, ben 2026-11-09). Shrunk toward zero.
+            gamma_usage = pm.Normal("gamma_usage", 0.0, pr["covariate"], shape=d.obs_usage.shape[1])
+            latent_obs = latent_obs + pt.dot(d.obs_usage, gamma_usage)
         loc_obs = link(latent_obs, likelihood)
 
         if is_hurdle(likelihood):
