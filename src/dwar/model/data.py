@@ -160,7 +160,8 @@ def build_model_data(
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
-    covariate. Both slots are empty in v1 and filled by later steps.
+    covariate. Prospect covariates are z-scored with missing flags
+    (`standardize_with_flags`), on `reference_players` when given. Both slots are empty in v1 and filled by later steps.
     `season_range_covariates`, keyed like `season_covariates`, scale each
     season's random-walk step (see model/talent.py).
 
@@ -249,11 +250,21 @@ def build_model_data(
 
     prospect = standardize_with_flags(static, COMBINE_FEATURES, None if reference_players is None else ref_static)
     if prospect_covariates is not None:
-        extra = (
-            players.join(prospect_covariates, on="player_id", how="left")
-            .sort("player_idx")
-            .drop("player_id", "player_idx")
+        # Raw metrics (nulls allowed), standardized like the combine drills:
+        # on the fit's players, with merged missing flags.
+        cols = tuple(c for c in prospect_covariates.columns if c != "player_id")
+        extra_static = players.join(prospect_covariates, on="player_id", how="left").sort("player_idx")
+        # Scales and flags come from players whose rookie season is in the
+        # window (only they have a rookie prior), so flags that coincide for
+        # them merge (a missing college match and a pre-2008 draft differ
+        # only for veterans the prior never sees).
+        in_window = (pl.col("first_season").fill_null(first_season) >= first_season)
+        extra_ref = (extra_static if reference_players is None else pl.DataFrame({"player_id": list(reference_players)}))
+        extra_ref = (
+            extra_ref.select("player_id").join(tables.player_static.select("player_id", "first_season"), on="player_id", how="left")
+            .filter(in_window).join(prospect_covariates, on="player_id", how="left")
         )
+        extra = standardize_with_flags(extra_static, cols, extra_ref)
         prospect = pl.concat([prospect, extra], how="horizontal")
 
     season_x = _per_season(ps, season_covariates, "season_covariates")

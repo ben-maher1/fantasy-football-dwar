@@ -220,12 +220,20 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
 
 def position_data(
     tables: PlayerTables, position: str, cfg: ModelConfig, cov: dict[str, Covariates] | None = None,
-    opportunity: pl.DataFrame | None = None,
+    opportunity: pl.DataFrame | None = None, prospect: pl.DataFrame | None = None,
 ) -> ModelData:
-    """One position's model data, with its situation factors if any, and its
-    weekly opportunity points if the position uses them."""
+    """One position's model data, with its situation factors if any, its
+    weekly opportunity points if the position uses them, and its college
+    prospect metrics if configured (`prospect`: features/prospect.py's
+    table; built from the cached pulls as of the tables' date if not given)."""
     c = (cov or {}).get(position)
     extra = {"opportunity": opportunity} if opportunity is not None and position in cfg.opportunity else {}
+    if cfg.prospect.get(position):
+        if prospect is None:
+            from dwar.features.prospect import prospect_table
+
+            prospect = prospect_table(tables.as_of, (position,))
+        extra["prospect_covariates"] = prospect.select("player_id", *cfg.prospect[position])
     return build_model_data(
         tables, position, cfg.first_season_by_position.get(position, cfg.first_season), min_plays=cfg.min_plays.get(position, 0),
         season_covariates=c.level if c is not None and c.level.width > 2 else None,
