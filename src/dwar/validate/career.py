@@ -183,6 +183,11 @@ VARIANTS: dict[str, dict] = {
 }
 
 
+# All eight tied the current model in every period. In the current model's
+# rookie forecast errors, early declare and age-adjusted yards per team pass
+# attempt had the steadiest slopes (+0.3-0.8 PPG per SD in 2014-16, 2017-19
+# and 2020-22); "lean" keeps only those two (the holdout was not looked at).
+VARIANTS["prospect_lean"] = VARIANTS["prospect"] | {"prospect": {POSITION: ("yptpa_age", "early_declare")}}
 for _m in PROSPECT_METRICS:
     VARIANTS[f"prospect-{_m}"] = VARIANTS["prospect"] | {
         "prospect": {POSITION: tuple(x for x in PROSPECT_METRICS if x != _m)}}
