@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import replace
@@ -37,7 +38,10 @@ from dwar.validate.stepthrough import DISCOUNT, HORIZON, Settings, step_through
 
 log = logging.getLogger(__name__)
 
-POSITION = "WR"
+# Position under test; DWAR_POSITION=RB runs the same variants for RBs
+# (plan "game-by-game RB model and usage tests", ben 2026-11-09), with
+# results in experiments/career_rb.
+POSITION = os.environ.get("DWAR_POSITION", "WR")
 FIRST_SEASON = 2013
 FIT_AS_OF = date(2020, 8, 1)      # before the 2020 season: the fit sees 2013-2019
 TEST_SEASONS = (2020, 2021, 2022)
@@ -69,6 +73,13 @@ VARIANTS: dict[str, dict] = {
     # Variants start from config/model.yaml, which now has the game-by-game
     # terms on, so earlier variants turn off what they lacked.
     "base": {"game_steps": (), "qb_drift": ()},  # growth and first-round step on
+    # RB step 1: the current RB model (season level; no QB drift, growth
+    # or first-round step, as config/model.yaml has for RB) vs the
+    # game-by-game model with young steps. Situation factors are off in this
+    # harness for both.
+    "rb_base": {"game_steps": (), "qb_drift": (), "young_steps": (), "sampler": {"draws": 3500}},
+    "rb_career": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                  "sampler": {"draws": 3500}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
@@ -180,7 +191,7 @@ VARIANTS: dict[str, dict] = {
 
 
 def root(name: str, period: str = "dev") -> Path:
-    base = data_dir() / "experiments" / "career"
+    base = data_dir() / "experiments" / ("career" if POSITION == "WR" else f"career_{POSITION.lower()}")
     return base / name if period == "dev" else base / period / name
 
 
