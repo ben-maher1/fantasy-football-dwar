@@ -360,7 +360,7 @@ def position_dwar(
         in_cur = last_season == clock.current
         if cur.any() and in_cur.any():
             ps_idx = latest["ps_idx"].to_numpy()
-            form = pd_.form_rest(ps_idx, remaining)
+            form = pd_.form_rest(ps_idx, remaining) + pd_.usage_rest(ps_idx)
             with_form = pd_.expected_points(pd_.latent[:, ps_idx] + form)
             j = int(np.flatnonzero(cur)[0])
             talent[:, :, j] = np.where(in_cur[None], with_form, talent[:, :, j])

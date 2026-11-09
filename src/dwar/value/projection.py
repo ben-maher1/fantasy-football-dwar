@@ -58,6 +58,8 @@ class PositionDraws:
     ps_pick_z: np.ndarray | None = None    # (player_seasons,) the player's standardized log pick
     rho_form: np.ndarray | None = None     # (draws,) "form" mode: per-game decay of in-season form
     form_dev: np.ndarray | None = None     # (draws, player_seasons) form after each season's last game
+    gamma_usage: np.ndarray | None = None  # (draws, 2) usage effects (RB); None = off
+    ps_usage_next: np.ndarray | None = None  # (player_seasons, 2) usage as of the next game
     qb_drift: np.ndarray | None = None     # (draws,) offseason drift per unit of QB rating
     qb_drift_low: np.ndarray | None = None
     ps_qb_end: np.ndarray | None = None    # (player_seasons,) QB rating in the season's last game
@@ -113,6 +115,14 @@ class PositionDraws:
         n = np.clip(remaining, 1, len(k)).astype(int)
         mean_decay = csum[:, n - 1] / n[None]                             # (draws, players)
         return np.where(remaining[None] > 0, self.form_dev[:, ps_idx] * mean_decay, 0.0)
+
+    def usage_rest(self, ps_idx: np.ndarray) -> np.ndarray | float:
+        """(draws, players) usage effect for the rest of the current season:
+        usage as of the next game, held (as in the step-through test);
+        0 without usage. Later seasons get none."""
+        if self.gamma_usage is None or self.ps_usage_next is None:
+            return 0.0
+        return self.gamma_usage @ self.ps_usage_next[ps_idx].T
 
     def growth_effect(self, ps_idx: np.ndarray, career_year: np.ndarray) -> np.ndarray:
         """(draws, players) growth term at `career_year` for the players of
@@ -176,6 +186,8 @@ class PositionDraws:
             sigma_young=maybe("sigma_young"),
             rho_season=maybe("rho_season"),
             level_mean=maybe("level_mean"),
+            gamma_usage=maybe("gamma_usage"),
+            ps_usage_next=getattr(d, "ps_usage_next", None),
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:

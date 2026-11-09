@@ -136,7 +136,10 @@ class ModelConfig(_Frozen):
     game_steps: tuple[str, ...] = ()  # talent also steps after every game (model/talent.py)
     game_mode: str = "walk"           # "walk": lasting per-game steps; "form": decaying in-season form
     qb_drift: tuple[str, ...] = ()    # offseason talent drift with the QB rating (model/talent.py)
-    form_rho: float | None = None      # hold the form decay rate fixed ("form" mode); None = estimate it
+    form_rho: float | dict[str, float | None] | None = None  # hold the form decay rate fixed ("form" mode), per position if a dict; None = estimate it
+
+    def form_rho_for(self, position: str) -> float | None:
+        return self.form_rho.get(position) if isinstance(self.form_rho, dict) else self.form_rho
     season_rho: tuple[str, ...] = ()  # talent pulled toward average between seasons (rho_season; random walk otherwise)
     season_rho_mean: Literal["free", "vet"] = "free"  # what season_rho pulls toward
     season_bump: tuple[str, ...] = ()  # a fading per-season bump on top of the lasting level (rho_bump, sigma_bump)

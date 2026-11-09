@@ -64,7 +64,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         round1=p in cfg.rookie_round1, growth=p in cfg.growth,
         opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
         game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
-        form_rho=cfg.form_rho, tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first, rookie_fluke=p in cfg.rookie_fluke, usage=p in cfg.usage,
+        form_rho=cfg.form_rho_for(p), tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first, rookie_fluke=p in cfg.rookie_fluke, usage=p in cfg.usage,
         young_steps=p in cfg.young_steps,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}

@@ -31,21 +31,33 @@ growth: [QB, WR, TE]         # lasting steps at career years 2 and 3, scaled by 
 # season, and an offseason drift with the QB the player had last. Both beat
 # the model without them on 2020-22 and on the 2023-25 holdout
 # (validate/career.py, variant qb3).
-game_steps: [WR]
+# RBs too (ben, 2026-11-09): game-by-game RB model beat the season-level one
+# in all four test periods (validate/career.py rb_career vs rb_base), with no
+# QB drift for RBs.
+game_steps: [WR, RB]
 game_mode: form
 qb_drift: [WR]
 # Young WRs also take a lasting talent step after each game, fading out over
 # about two seasons of games (ben, 2026-11-06). Better than without on
 # 2020-22 (MAE +0.011) and 2023-25 (MAE +0.016) (validate/career.py "young").
-young_steps: [WR]
+young_steps: [WR, RB]
+# RB usage (plan "game-by-game RB model and usage tests", ben 2026-11-09):
+# carry share over the last 3 games and the change in snap share shift each
+# game, from earlier games only. Better log score on 2017-19, 2020-22 and
+# 2023-25 (rb_usage vs rb_career: +0.018, +0.019, +0.007).
+usage: [RB]
 draws_by_position:
+  RB: 3500   # as validated (rb_usage)
   WR: 4000   # the form decay rate mixes slowly (2000 draws: ESS ~320); young steps' size just missed R-hat at 3500
 # The game-by-game WR model was validated on 2013 on (ben: fewer, recent
 # years are fine); from 2006 its fit also runs out of memory (one form term
 # per game).
 first_season_by_position:
   WR: 2013
+  RB: 2013   # the game-by-game RB model was validated from 2013
 # The form decay rate mixed slowly in the 2013-2026 WR fit (one chain
 # wandered off; R-hat 1.15), so it is held at the value the converged chains
 # found (0.73-0.74; 0.76 on 2013-2022, 0.83 on 2013-2019).
-form_rho: 0.74
+form_rho:
+  WR: 0.74
+  RB: null   # estimated: RB fits put it near 0.27-0.29, stable across periods

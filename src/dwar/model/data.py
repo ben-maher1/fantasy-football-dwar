@@ -60,6 +60,7 @@ class ModelData:
     ps_career_games_end: np.ndarray | None = None  # (n_ps,) career games after that season's last game
     obs_exit: np.ndarray | None = None      # (n_obs,) injury-exit game (features/exits.py), kept only with injury_exits="flag"
     obs_usage: np.ndarray | None = None     # (n_obs, 2) usage from the season's earlier games (usage_design); None without usage columns
+    ps_usage_next: np.ndarray | None = None  # (n_ps, 2) usage as of a next game after each player-season's last (value layer)
 
     @property
     def n_obs(self) -> int:
@@ -328,6 +329,18 @@ def build_model_data(
     ).sort("_row")
     y = obs["fpts"].to_numpy().astype(float)
     obs_usage = usage_design(obs) if "carry_share" in obs.columns else None
+    ps_usage_next = None
+    if obs_usage is not None:
+        # One extra (unplayed) game after each player-season's last, so its
+        # usage is what the next game would see.
+        nxt = (obs.group_by("player_id", "season", "ps_idx").agg(pl.col("week").max() + 1)
+               .with_columns(_next=pl.lit(True)))
+        cols = ["player_id", "season", "week", "carry_share", *(["offense_pct"] if "offense_pct" in obs.columns else [])]
+        ext = pl.concat([obs.select(*cols, "ps_idx").with_columns(_next=pl.lit(False)), nxt], how="diagonal_relaxed")
+        u = usage_design(ext)
+        flag = ext["_next"].to_numpy()
+        ps_usage_next = np.zeros((ps.height, 2))
+        ps_usage_next[ext["ps_idx"].to_numpy()[flag]] = u[flag]
     obs_qb = (obs["qb_rating"].fill_null(0.0).to_numpy().astype(float) if "qb_rating" in obs.columns
               else np.zeros(obs.height))
     ends = (pl.DataFrame({"ps_idx": obs["ps_idx"], "week": obs["week"], "q": obs_qb})
@@ -370,6 +383,7 @@ def build_model_data(
         obs_career_games=obs["career_games"].fill_null(0).to_numpy().astype(float),
         obs_qb=obs_qb,
         obs_usage=obs_usage,
+        ps_usage_next=ps_usage_next,
         ps_qb_end=ps_qb_end,
         ps_career_games=cg["cg0"].to_numpy().astype(float),
         ps_career_games_end=cg["cg1"].to_numpy().astype(float),
