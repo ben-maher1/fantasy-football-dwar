@@ -74,7 +74,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
     # game-by-game WR fit (a form term per game) ran out of memory.
     with tempfile.TemporaryDirectory(dir=data_dir()) as tmp:
         nutpie.sample(
-            compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=s.tune, chains=s.chains, seed=cfg.seed,
+            compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=cfg.tune_by_position.get(p, s.tune), chains=s.chains, seed=cfg.seed,
             progress_bar=False, save_warmup=False, zarr_store=zarr_store.LocalStore(tmp),
         )
         posterior = _compact(Path(tmp), d, cfg.likelihood_for(p))

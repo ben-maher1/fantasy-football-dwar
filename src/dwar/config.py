@@ -151,6 +151,7 @@ class ModelConfig(_Frozen):
     injury_exits: tuple[str, ...] = ()  # leave injury-exit games out of the fit (features/exits.py)
     young_steps: tuple[str, ...] = ()  # lasting per-game talent steps for young players ("form" mode)
     first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one
+    tune_by_position: dict[str, int] = {}   # sampler tuning steps where a position needs more than `sampler.tune`
     draws_by_position: dict[str, int] = {}  # sampler draws where a position needs more than `sampler.draws`
 
     def likelihood_for(self, position: str) -> str:

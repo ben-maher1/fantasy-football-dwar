@@ -47,8 +47,10 @@ young_steps: [WR, RB]
 # 2023-25 (rb_usage vs rb_career: +0.018, +0.019, +0.007).
 usage: [RB]
 draws_by_position:
-  RB: 7000   # 3500 as validated (rb_usage); 2013-2026 fits just missed at 3500 (R-hat 1.012 h1) and 5000 (R-hat 1.0100 h0)
+  RB: 5000   # 3500 as validated (rb_usage); 2013-2026 fits just missed at 3500 (R-hat 1.012 h1) and 5000 (R-hat 1.0100 h0, hurdle terms); 7000 filled the disk
   WR: 4000   # the form decay rate mixes slowly (2000 draws: ESS ~320); young steps' size just missed R-hat at 3500
+tune_by_position:
+  RB: 2500   # longer tuning for the slow-mixing hurdle terms (h0, h1)
 # The game-by-game WR model was validated on 2013 on (ben: fewer, recent
 # years are fine); from 2006 its fit also runs out of memory (one form term
 # per game).
