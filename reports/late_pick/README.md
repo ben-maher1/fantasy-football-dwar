@@ -20,3 +20,26 @@ All periods: 1.004 / 0.854 / 0.806; config uses 1.0 / 0.85 / 0.80 (seasons beyon
 three keep 0.80). Blending toward last PPG x the historical keep-rate (as for old
 star RBs) helped less (best: 25% blend, MAE 3.19 -> 3.14), since a young
 player's last season is noisy. Rounds 1-2 need no change (forecast bias -0.2).
+
+## Follow-up and decision: off (2026-11-10)
+
+ben flagged Achane (round 3; 16.1 / 15.3 / 18.1 PPG in 2023-25) as cut far too
+hard, and asked why young RBs are over-forecast at all, without a round line.
+Cases widened to career years 1-4 off a 5+ PPG season, each period fitted on
+the other three (scratchpad `study/anchor*.py`, `study/fade*.py`):
+
+- The model's random-walk talent has no pull back toward a typical level, so
+  seasons two or three out run high; for young RBs the gap is mostly in rounds
+  3-7 (actual / forecast about 0.88 two and three seasons out), not rounds 1-2
+  (1.02 / 0.95). Undrafted backs fall in between (about 80 cases).
+- An anchor (draft-slot level mixed with the player's own career PPG, weighted by
+  games, with the forecast drifting toward it) did not work: the games weight
+  ran to infinity, the fit was unstable, and 2023-25 got worse in every version.
+- Smooth fades: one fade for all young RBs (x0.94 / x0.895) had the best MAE
+  (3.44 -> 3.37; this rule 3.39) but left rounds 1-2 about 0.75 PPG low; a log
+  draft-pick term and a production-level term added nothing. A milder fitted
+  round 3+ fade (x0.89 / x0.855) was about unbiased in every group (this rule:
+  late-round 14+ PPG backs about 1 PPG low), MAE 3.39.
+
+All versions were within about 0.07 PPG MAE of each other. ben chose to turn the
+rule off (`late_pick: {}` in config/value.yaml); the code and tests stay.

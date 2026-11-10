@@ -13,6 +13,9 @@ player's latest full season (capped at the last factor). Measured on the
 leave-one-period-out test: MAE 3.19 -> 3.09 PPG on 276 cases, better in
 three of four periods (reports/late_pick/README.md). Like the QB spread
 factor, the factors are learned from backtest misses and fixed in config.
+
+Off since 2026-11-10 (ben): it cut productive late-round stars too hard, and
+smoother fades were no clearer win (reports/late_pick/README.md).
 """
 
 from __future__ import annotations
