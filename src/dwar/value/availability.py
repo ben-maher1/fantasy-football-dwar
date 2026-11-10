@@ -276,6 +276,25 @@ def availability_rows(
     return games, survival
 
 
+def ppg_survival_rows(player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of, first: int) -> pl.DataFrame:
+    """Survival rows from points per game rather than fitted talent, from
+    season `first` on: fitted talent starts in each position's fit window
+    (2013 for RB/WR), which holds very few old players, and the model then
+    kept a 30-year-old star RB 62% likely to play at 34 (history: about 22%).
+    Only seasons whose next season has ended count, so nothing after
+    `as_of` is seen."""
+    complete = season_games(schedules).filter(pl.col("last_gameday") < as_of)["season"]
+    played = player_seasons.filter(pl.col("games_played") > 0)
+    nxt = played.select("player_id", pl.col("season") - 1, next_played=pl.lit(1))
+    return (
+        played.filter(pl.col("age_sept1").is_not_null() & (pl.col("season") >= first)
+                      & (pl.col("season") + 1).is_in(complete.implode()))
+        .join(nxt, on=["player_id", "season"], how="left")
+        .select("position", age="age_sept1", talent="fpts_per_game",
+                successes=pl.col("next_played").fill_null(0), trials=pl.lit(1))
+    )
+
+
 def injury_share(player_seasons: pl.DataFrame, injury: pl.DataFrame, complete: list[int]) -> dict[str, float]:
     """Per position: weeks missed to injury / team games not played, over
     complete seasons with reports, among players who played."""
@@ -300,13 +319,19 @@ def fit_games(rows: pl.DataFrame, knot: float | None, injury: bool, groups: bool
 def fit_availability(
     talent: pl.DataFrame, player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of,
     injury: pl.DataFrame | None = None, hinge_quantile: float | None = None, injury_groups: bool = False,
-    lagged: bool = False,
+    lagged: bool = False, survival_first: int | None = None,
 ) -> AvailabilityModel:
     """Games and survival models per position. `injury` (injury_seasons) adds
-    injury terms to the games model; `hinge_quantile` its talent hinge."""
+    injury terms to the games model; `hinge_quantile` its talent hinge.
+    `survival_first` trains survival on points per game from that season on
+    instead of fitted talent (`ppg_survival_rows`)."""
     games_rows, survival_rows = availability_rows(
         talent, player_seasons, schedules, as_of, injury, injury_groups, lagged
     )
+    if survival_first is not None:
+        positions = talent["position"].unique().to_list()
+        survival_rows = ppg_survival_rows(player_seasons.filter(pl.col("position").is_in(positions)),
+                                          schedules, as_of, survival_first)
     games, survival, knots = {}, {}, {}
     for (position,), r in games_rows.sort("position").group_by("position", maintain_order=True):
         if hinge_quantile is not None:

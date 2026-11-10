@@ -179,6 +179,7 @@ class ValueConfig(_Frozen):
     injury_history: bool = False             # injury history in the games model + current-status cut
     games_hinge_quantile: float | None = None  # games model: talent stops adding games above this quantile
     games_lagged_talent: bool = False        # games model trained on last season's talent
+    survival_first_season: int | None = None  # survival trained on points per game from this season on (else fitted talent)
 
 
 def _read_yaml(path: Path) -> dict:

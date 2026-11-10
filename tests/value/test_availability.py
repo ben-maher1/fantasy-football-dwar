@@ -5,7 +5,14 @@ import polars as pl
 import pytest
 
 from dwar.value.availability import (
-    AvailabilityDraws, _design, _sigmoid, availability_rows, fit_games, fit_logistic, season_games,
+    AvailabilityDraws,
+    _design,
+    _sigmoid,
+    availability_rows,
+    fit_games,
+    fit_logistic,
+    ppg_survival_rows,
+    season_games,
 )
 
 
@@ -60,6 +67,20 @@ def test_rows_use_only_completed_seasons():
     # 2022, Q did not (Q's 2023 return is not yet a known outcome for 2022).
     assert sorted(survival["successes"].to_list()) == [0, 1]
     assert season_games(sched).filter(pl.col("season") == 2023)["games"].item() == 3
+
+
+def test_ppg_survival_rows_use_points_and_only_completed_seasons():
+    sched = schedules([2020, 2021, 2022], in_progress=2023)
+    seasons = pl.DataFrame({
+        "player_id": ["P", "P", "P", "Q", "Q"], "season": [2020, 2021, 2023, 2020, 2022],
+        "position": ["RB"] * 5, "games_played": [3, 2, 1, 3, 1],
+        "fpts_per_game": [15.0, 12.0, 9.0, 6.0, 5.0], "age_sept1": [30.0, 31.0, 33.0, 27.0, 29.0],
+    })
+    rows = ppg_survival_rows(seasons, sched, date(2023, 9, 10), first=2020)
+    # 2020 -> 2021 and 2021 -> 2022 only (2023 is under way): P played 2021,
+    # not 2022; Q skipped 2021, played 2022 is a 2021 row Q does not have.
+    assert sorted(rows.select("age", "talent", "successes").rows()) == [(27.0, 6.0, 0), (30.0, 15.0, 1), (31.0, 12.0, 0)]
+    assert ppg_survival_rows(seasons, sched, date(2023, 9, 10), first=2021).height == 1
 
 
 def test_lagged_rows_pair_games_with_last_seasons_talent():
