@@ -28,6 +28,7 @@ from dwar.features.player_tables import PlayerTables
 from dwar.features.situation import Covariates
 from dwar.model.fit import FitResult
 from dwar.model.talent import for_position
+from dwar.value import late_pick
 from dwar.value.availability import (
     AvailabilityDraws,
     draft_terms,
@@ -384,6 +385,12 @@ def position_dwar(
         keep = keep_rates(tables.player_seasons, position, o.min_age, o.min_ppg, o.min_games, clock.complete)
         last = latest_full_season(tables.player_seasons, latest["player_id"].to_list(), o.min_games)
         talent = pull_back(talent, seasons, clock.current, last, keep, o.min_age, o.min_ppg, o.weight)
+    if position in cfg.late_pick:
+        lp = cfg.late_pick[position]
+        last = latest_full_season(tables.player_seasons, latest["player_id"].to_list(), lp.min_games)
+        hit = late_pick.qualifying(last, tables.player_static, lp.min_round, lp.max_career_year, lp.min_ppg)
+        talent = late_pick.pull_back(talent, seasons, clock.current,
+                                     last["season"].fill_null(0).to_numpy().astype(float), hit, lp.factors)
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
 

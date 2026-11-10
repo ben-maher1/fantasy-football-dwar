@@ -14,5 +14,7 @@ old_star:                # RBs 29+ off a 12+ PPG season: future seasons 75% towa
   RB: {min_age: 29, min_ppg: 12, min_games: 8, weight: 0.75}
 draft_survival: [RB]     # early-career draft terms in survival (validate/draft_avail.py: RB better 2013-22 and 2023-25)
 draft_games: [RB, QB]    # ... and in games played (RB tie/better, QB better in both periods)
+late_pick:               # RBs from round 3 on / undrafted, 8+ PPG in career yrs 1-3: talent x1.0 / x0.85 / x0.80 one, two, three+ seasons on (ben, 2026-11-10; reports/late_pick)
+  RB: {min_round: 3, max_career_year: 3, min_ppg: 8, min_games: 8, factors: [1.0, 0.85, 0.80]}
 survival_first_season: 1999  # survival trained on points per game since 1999, not fitted talent (2013+ for RB/WR): too few old players otherwise (validate/survival.py, 2026-11-10)
 injury_history: true     # weeks missed to injury in the last two seasons + current injury status (injury step)

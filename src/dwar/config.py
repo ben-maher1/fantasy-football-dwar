@@ -175,6 +175,15 @@ class OldStar(_Frozen):
     weight: float = Field(default=0.75, ge=0.0, le=1.0)  # share of the way toward the historical rule
 
 
+class LatePick(_Frozen):
+    """Pull-back for productive young late picks (value/late_pick.py)."""
+    min_round: int = 3          # drafted in this round or later, or undrafted
+    max_career_year: int = 3    # latest full season in career years 1-3
+    min_ppg: float = 8.0        # with this PPG or more
+    min_games: int = 8          # games for a season to count as full
+    factors: tuple[float, ...] = (1.0, 0.85, 0.80)  # talent scale 1, 2, 3+ seasons after it
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
@@ -190,7 +199,8 @@ class ValueConfig(_Frozen):
     survival_first_season: int | None = None  # survival trained on points per game from this season on (else fitted talent)
     draft_survival: tuple[str, ...] = ()     # positions whose survival model has early-career draft terms
     draft_games: tuple[str, ...] = ()        # ... and games model
-    old_star: dict[str, OldStar] = {}        # positions whose old stars' future seasons are pulled back
+    old_star: dict[str, OldStar] = {}
+    late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
 
 
 def _read_yaml(path: Path) -> dict:
