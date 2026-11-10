@@ -166,7 +166,8 @@ class PositionDraws:
             zero_value=d.zero_week_mean,
             eta=maybe("eta"),
             kappa=maybe("kappa"),
-            age_curve="hinge" if hinge else ("cubic" if "beta3" in posterior["posterior"] else "quadratic"),
+            age_curve="hinge" if hinge else ("cubic" if "beta3" in posterior["posterior"] else (
+                "late" if "age_late" in posterior["posterior"] else "quadratic")),
             growth=maybe("growth"),
             growth_pick=maybe("growth_pick"),
             career_year=getattr(d, "ps_career_year", None),
@@ -180,7 +181,7 @@ class PositionDraws:
             ps_qb_end=getattr(d, "ps_qb_end", None),
             fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
             if fade_qb and getattr(d, "ps_qb_end", None) is not None else None,
-            beta3=maybe("beta3"),
+            beta3=maybe("beta3") if "beta3" in posterior["posterior"] else maybe("age_late"),
             lam_tau=maybe("lam_tau"),
             ps_career_games_end=getattr(d, "ps_career_games_end", None),
             sigma_young=maybe("sigma_young"),

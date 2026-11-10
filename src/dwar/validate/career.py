@@ -84,6 +84,15 @@ VARIANTS: dict[str, dict] = {
     # both predict rb_career's misses in all four periods).
     "rb_usage": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                  "usage": (POSITION,), "sampler": {"draws": 3500}},
+    # 2026-11-10 (ben): star RBs past 29 ran ~3 PPG high a season out, and
+    # backs at ~15.6 PPG at 30 went 11.8 / 8.1 / 7.0 after (model: about
+    # 15 / 12 / 10). rb_late = rb_usage + an extra straight-line decline past 28.
+    # Result: tie in all three periods (discounted log +.003 / +.001 / -.002);
+    # age_late came out near zero (+0.11 / -0.01 / +0.02, sd ~0.1). Old RBs
+    # as a group (6+ PPG at 29+) are forecast well; only the ~10 star cases
+    # run high. Not kept.
+    "rb_late": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                "usage": (POSITION,), "sampler": {"draws": 3500}, "age_curve": {POSITION: "late"}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes

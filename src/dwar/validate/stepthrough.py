@@ -173,7 +173,7 @@ class Settings:
         X = np.column_stack([np.ones(d.n_players), d.log_pick_z, d.undrafted])
         r1 = d.round1 if d.round1 is not None else np.zeros(d.n_players)
         g = len(GROWTH_YEARS)
-        plateau, talent = "age_rise" in post, "age_shift" in post
+        plateau, talent, late = "age_rise" in post, "age_shift" in post, "age_late" in post
         return cls(
             likelihood=likelihood,
             alpha0=take("alpha0"), alpha_pick=take("alpha_pick"), alpha_undrafted=take("alpha_undrafted"),
@@ -193,8 +193,8 @@ class Settings:
             qb_drift_low=take("qb_drift_low") if "qb_drift" in post else None,
             fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
             if fade_qb and d.ps_qb_end is not None else None,
-            beta3=take("beta3") if "beta3" in post else (take("age_fall2") if plateau else None),
-            age_curve="plateau" if plateau else ("talent" if talent else "quadratic"),
+            beta3=take("beta3") if "beta3" in post else (take("age_fall2") if plateau else (take("age_late") if late else None)),
+            age_curve="plateau" if plateau else ("talent" if talent else ("late" if late else "quadratic")),
             age_shift=take("age_shift") if talent else None,
             age_ref=take("age_ref") if talent else None,
             age_ref_sd=take("age_ref_sd") if talent else None,
@@ -220,8 +220,8 @@ def _age_effect(s: Settings, age_c: float, draw: np.ndarray | None = None,
     if draw is not None:
         b1, b2 = b1[draw], b2[draw]
         b3 = None if b3 is None else b3[draw]
-    if s.age_curve == "plateau":
-        return age_curve_effect(age_c, b1, b2, "plateau", b3)
+    if s.age_curve in ("plateau", "late"):
+        return age_curve_effect(age_c, b1, b2, s.age_curve, b3)
     a = age_c - shift if shift is not None else age_c
     out = b1 * a + b2 * a**2
     return out if b3 is None else out + b3 * a**3

@@ -3,6 +3,7 @@
     latent[i,s]    = level[i,s] + age_effect(age[i,s]) + season_x @ eta
     age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2         (quadratic, default)
                    = beta1*min(a-30, 0) + beta2*max(a-30, 0)   (hinge: two straight lines meeting at 30)
+                   = quadratic + beta3*max(a-28, 0)            (late: extra yearly decline past 28)
     level[i,s]     = level[i,s-1] + tau*exp(season_vol_x @ kappa)*sqrt(gap)*z[i,s]
     latent[i,first] ~ Normal(prior_mean_i, prior_sd_i)   (before season covariates)
     center[i,s]    = link(latent[i,s])
@@ -59,6 +60,7 @@ from dwar.model.data import ModelData
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
 AGE_KNOT = 30.0  # hinge age curve: where the slope may change
+LATE_KNOT = 28.0  # late age curve: extra straight-line decline starts here
 PLATEAU = (24.0, 28.0)  # plateau age curve: rises to the first age, flat to the second, then falls
 AGE_SHIFT_MAX = 5.0  # talent-shifted age curve: the peak moves at most this many years
 KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
@@ -179,6 +181,11 @@ def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic", beta3=0.0):
     if curve == "hinge":
         a = age_c - (AGE_KNOT - 26.0)
         return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
+    if curve == "late":
+        # Quadratic plus a straight-line change in slope past LATE_KNOT
+        # (beta3 per year; negative = a steeper late decline).
+        late = age_c - (LATE_KNOT - 26.0)
+        return beta1 * age_c + beta2 * age_c**2 + beta3 * (late + abs(late)) / 2
     if curve == "plateau":
         # beta1: yearly rise before PLATEAU[0]; beta2, beta3: linear and
         # squared fall after PLATEAU[1]; flat between.
@@ -400,6 +407,8 @@ def build_talent_model(
             beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
             # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
             beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
+            if age_curve == "late":
+                beta3 = pm.Normal("age_late", 0.0, pr["beta1"])
         if age_curve != "talent":
             age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve, beta3)
 
