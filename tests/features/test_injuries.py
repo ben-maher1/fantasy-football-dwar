@@ -5,21 +5,10 @@ import polars as pl
 import pytest
 
 from dwar.features.injuries import (
-    GROUPS,
-    InjuryRaw,
-    body_group,
-    current_status,
-    injury_seasons,
-    injury_weeks,
-    team_weeks,
+    GROUPS, InjuryRaw, body_group, current_status, injury_seasons, injury_weeks, team_weeks,
 )
 from dwar.value.availability import (
-    INJURY_WEEKS_UNIT,
-    availability_rows,
-    injury_history_terms,
-    injury_terms,
-    status_effects,
-    status_multiplier,
+    INJURY_WEEKS_UNIT, availability_rows, injury_history_terms, injury_terms, status_effects, status_multiplier,
 )
 
 

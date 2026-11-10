@@ -158,7 +158,9 @@ def stale_seasons(
     stale = []
     for season in seasons:
         cached = latest_file(root, SOURCE, dataset, season_file(season))
-        if cached is None or not is_final(season, cached.pulled_at) and now - cached.pulled_at > max_age:
+        if cached is None:
+            stale.append(season)
+        elif not is_final(season, cached.pulled_at) and now - cached.pulled_at > max_age:
             stale.append(season)
     return stale
 

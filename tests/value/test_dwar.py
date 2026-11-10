@@ -11,14 +11,7 @@ from dwar.config import LeagueFormat, ValueConfig
 from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
 from dwar.value.availability import AvailabilityDraws
-from dwar.value.dwar import (
-    OUTPUT_COLUMNS,
-    SeasonClock,
-    ValueInputs,
-    dwar_table,
-    position_dwar,
-    season_clock,
-)
+from dwar.value.dwar import OUTPUT_COLUMNS, SeasonClock, ValueInputs, dwar_table, position_dwar, season_clock
 from dwar.value.wins import wins_per_game
 
 from ..model.simulate import simulate
@@ -198,7 +191,6 @@ def test_short_games_lower_value(end_to_end):
 
 def test_out_for_season_is_point_in_time():
     from datetime import date
-
     from dwar.config import load_out_for_season
     assert "00-0040130" in load_out_for_season(2026, date(2026, 11, 7))
     assert "00-0040130" not in load_out_for_season(2026, date(2026, 11, 6))  # before it was known

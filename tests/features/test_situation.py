@@ -26,13 +26,7 @@ from polars.testing import assert_frame_equal
 from dwar.config import DraftDates, load_scoring
 from dwar.features.asof import STAT_KEEP, RawTables, asof_snapshot
 from dwar.features.player_tables import build_player_tables
-from dwar.features.situation import (
-    SituationRaw,
-    covariates,
-    prepare,
-    season_situation,
-    situation_table,
-)
+from dwar.features.situation import SituationRaw, covariates, prepare, season_situation, situation_table
 
 SEASONS = (2020, 2021)
 WEEKS = (1, 2)

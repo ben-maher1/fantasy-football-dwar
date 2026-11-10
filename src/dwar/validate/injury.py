@@ -37,19 +37,8 @@ from dwar.features.asof import RawTables, asof_snapshot
 from dwar.features.injuries import FIRST_SEASON, InjuryRaw, injury_seasons, injury_weeks
 from dwar.features.player_tables import build_player_tables
 from dwar.value.availability import (
-    HINGE_QUANTILE,
-    INJURY_GROUP_TERMS,
-    INJURY_TOTALS,
-    Logistic,
-    _design,
-    _sigmoid,
-    availability_rows,
-    fit_games,
-    fit_logistic,
-    injury_history_terms,
-    season_games,
-    status_effects,
-    status_rows,
+    HINGE_QUANTILE, INJURY_GROUP_TERMS, INJURY_TOTALS, Logistic, _design, _sigmoid, availability_rows, fit_games,
+    fit_logistic, injury_history_terms, season_games, status_effects, status_rows,
 )
 
 log = logging.getLogger(__name__)
@@ -192,7 +181,7 @@ def status_forecast(
         k = np.array([_kappa(fit, int(m)) for m in n])
         for name, sh in (("base", share), ("status", share * mult)):
             sh = np.clip(sh, 1e-6, 1 - 1e-6)
-            out[name]["n"] += len(y)
+            out[name]["n"] += int(len(y))
             out[name]["ae"] += float(np.sum(np.abs(n * sh - y)))
             out[name]["ls"] += float(np.sum(betabinom.logpmf(y, n, sh * k, (1 - sh) * k)))
     out["n_injured"] = rows.filter(pl.col("bucket") != "healthy").height

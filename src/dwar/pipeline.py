@@ -13,18 +13,11 @@ import time
 from datetime import date
 from pathlib import Path
 
-from dwar.config import (
-    REPO_ROOT,
-    load_format,
-    load_model_config,
-    load_scoring,
-    load_value_config,
-    uses_situation,
-)
+from dwar.config import REPO_ROOT, load_format, load_model_config, load_scoring, load_value_config, uses_situation
 from dwar.features.asof import RawTables, asof_snapshot
 from dwar.features.injuries import InjuryRaw, injury_weeks
-from dwar.features.opportunity import opportunity_table
 from dwar.features.player_tables import build_player_tables
+from dwar.features.opportunity import opportunity_table
 from dwar.features.situation import SituationRaw, model_covariates, prepare
 from dwar.model.diagnostics import FitFailed
 from dwar.model.fit import fit_positions

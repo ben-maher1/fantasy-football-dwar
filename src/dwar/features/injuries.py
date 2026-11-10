@@ -84,9 +84,7 @@ class InjuryRaw:
 
 
 def _franchise(col: str) -> pl.Expr:
-    from dwar.features.situation import (
-        FRANCHISE,  # local: situation imports player tables too
-    )
+    from dwar.features.situation import FRANCHISE  # local: situation imports player tables too
 
     return pl.col(col).replace(FRANCHISE)
 

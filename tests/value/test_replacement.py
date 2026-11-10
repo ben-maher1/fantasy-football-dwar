@@ -50,7 +50,6 @@ def test_unknown_slot_rejected():
 
 def test_waiver_level_is_first_unrostered():
     import numpy as np
-
     from dwar.value.replacement import waiver_level
     t = np.arange(30, 0, -1.0)[None, :]  # 30 .. 1
     pos = np.array(["WR"] * 30)
@@ -60,7 +59,6 @@ def test_waiver_level_is_first_unrostered():
 
 def test_start_share_starters_always_bench_sometimes():
     import numpy as np
-
     from dwar.value.replacement import share_at, start_share
     rng = np.random.default_rng(0)
     talent = {"WR": np.linspace(20, 1, 40), "RB": np.linspace(18, 1, 40)}
