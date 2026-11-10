@@ -137,3 +137,35 @@ def test_talent_hinge_flattens_games_above_the_knot():
 
 def certain_coefs() -> np.ndarray:
     return np.array([[50.0, 0.0, 0.0, 0.0]])
+
+
+def test_draft_terms_only_in_early_career_and_undrafted_as_late_pick():
+    from dwar.value.availability import PICK_CENTER, UNDRAFTED_PICK, draft_terms
+
+    d = draft_terms(np.array([1.0, 4.0, 5.0, 2.0]), np.array([64.0, 233.0, 10.0, np.nan]))
+    assert np.allclose(d[:, 0], [1, 1, 0, 1])
+    assert np.isclose(d[0, 1], 0.0)
+    assert np.isclose(d[1, 1], np.log(233.0 / PICK_CENTER))
+    assert d[2, 1] == 0.0
+    assert np.isclose(d[3, 1], np.log(UNDRAFTED_PICK / PICK_CENTER))
+
+
+def test_survival_prob_needs_draft_terms_when_the_model_has_them():
+    coefs = np.tile([2.0, 0.0, 0.0, 0.0, 0.0, -1.0], (10, 1))
+    draws = AvailabilityDraws({}, {}, {"RB": coefs}, 17, draft_survival=("RB",))
+    age, tal = np.full((10, 2), 24.0), np.full((10, 2), 10.0)
+    with pytest.raises(ValueError):
+        draws.survival_prob("RB", age, tal)
+    late = draws.survival_prob("RB", age, tal, np.array([[1.0, np.log(4.0)], [1.0, 0.0]]))
+    assert (late[:, 0] < late[:, 1]).all()
+
+
+def test_draft_columns_count_career_years_from_draft_or_first_season():
+    from dwar.value.availability import _draft_cols
+
+    static = pl.DataFrame({"player_id": ["D", "U"], "draft_year": [2020, None], "draft_pick": [128, None],
+                           "first_season": [2020, 2021]})
+    rows = pl.DataFrame({"player_id": ["D", "D", "U"], "season": [2021, 2024, 2021]})
+    d = _draft_cols(rows, static, pl.col("season"))
+    assert np.allclose(d[:, 0], [1, 0, 1])           # D year 2, D year 5, U year 1
+    assert np.isclose(d[0, 1], np.log(2.0))

@@ -93,6 +93,13 @@ VARIANTS: dict[str, dict] = {
     # run high. Not kept.
     "rb_late": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                 "usage": (POSITION,), "sampler": {"draws": 3500}, "age_curve": {POSITION: "late"}},
+    # 2026-11-10 (ben): productive young RBs drafted in rounds 3-7 or
+    # undrafted ran 1.0-1.4 PPG below rb_usage's forecasts in career years
+    # 2-4 (all four periods). rb_growth = rb_usage + the draft-scaled growth
+    # steps at career years 2 and 3 and the first-round rookie step that
+    # QB/WR/TE use.
+    "rb_growth": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                  "usage": (POSITION,), "sampler": {"draws": 3500}, "growth": (POSITION,), "rookie_round1": (POSITION,)},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes

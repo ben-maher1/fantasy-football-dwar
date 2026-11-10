@@ -188,6 +188,8 @@ class ValueConfig(_Frozen):
     games_hinge_quantile: float | None = None  # games model: talent stops adding games above this quantile
     games_lagged_talent: bool = False        # games model trained on last season's talent
     survival_first_season: int | None = None  # survival trained on points per game from this season on (else fitted talent)
+    draft_survival: tuple[str, ...] = ()     # positions whose survival model has early-career draft terms
+    draft_games: tuple[str, ...] = ()        # ... and games model
     old_star: dict[str, OldStar] = {}        # positions whose old stars' future seasons are pulled back
 
 

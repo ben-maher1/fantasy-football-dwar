@@ -50,6 +50,29 @@ BASE_RIDGE = 0.01
 GROUP_RIDGE = 16.0          # prior sd 0.25 on a group's deviation per 4 weeks
 INJURY_TOTALS = ("injury_last", "injury_prior")
 INJURY_GROUP_TERMS = tuple(f"injury_last_{g}" for g in GROUPS)
+# Draft terms (validate/draft_avail.py, 2026-11-10): for career years 1-4, a
+# flag and the flag times log(pick / 64), undrafted counted as pick 260.
+EARLY_YEARS = 4
+PICK_CENTER = 64.0
+UNDRAFTED_PICK = 260.0
+
+
+def draft_terms(career_year: np.ndarray, pick: np.ndarray) -> np.ndarray:
+    """(..., 2) draft terms for the season a player is in his `career_year`."""
+    cy = np.asarray(career_year, float)
+    early = ((cy >= 1) & (cy <= EARLY_YEARS)).astype(float)
+    p = np.where(np.isnan(np.asarray(pick, float)), UNDRAFTED_PICK, pick)
+    return np.stack([early, early * np.log(p / PICK_CENTER)], axis=-1)
+
+
+def _draft_cols(df: pl.DataFrame, static: pl.DataFrame, season_expr: pl.Expr) -> np.ndarray:
+    """Draft terms for rows of `df` (player_id, plus the columns `season_expr`
+    reads) in the season `season_expr` gives. Undrafted players' career year
+    counts from their first season played."""
+    s = static.select("player_id", "draft_year", "draft_pick", "first_season")
+    j = df.select("player_id", target=season_expr).join(s, on="player_id", how="left", maintain_order="left")
+    cy = j.select((pl.col("target") - pl.coalesce("draft_year", "first_season") + 1).cast(pl.Float64).fill_null(99.0))
+    return draft_terms(cy.to_series().to_numpy(), j["draft_pick"].cast(pl.Float64).to_numpy())
 
 
 def _design(
@@ -145,6 +168,8 @@ class AvailabilityModel:
     # Share of a player's missed team games that were missed to injury, by
     # position: turns a projected season's missed games into injury weeks.
     injury_share: dict[str, float] = field(default_factory=dict)
+    draft_survival: tuple[str, ...] = ()  # positions whose survival model has draft terms
+    draft_games: tuple[str, ...] = ()     # ... and games model
 
     def draw(self, n_draws: int, rng: np.random.Generator) -> AvailabilityDraws:
         return AvailabilityDraws(
@@ -157,6 +182,8 @@ class AvailabilityModel:
             injury_groups=self.injury_groups,
             games_knot=dict(self.games_knot),
             injury_share=dict(self.injury_share),
+            draft_survival=self.draft_survival,
+            draft_games=self.draft_games,
         )
 
 
@@ -172,25 +199,44 @@ class AvailabilityDraws:
     injury_groups: bool = False
     games_knot: dict[str, float] = field(default_factory=dict)
     injury_share: dict[str, float] = field(default_factory=dict)
+    draft_survival: tuple[str, ...] = ()
+    draft_games: tuple[str, ...] = ()
 
-    def survival_prob(self, position: str, age: np.ndarray, talent: np.ndarray) -> np.ndarray:
-        """P(plays next season); `age` and `talent` are (draws, players)."""
-        return _sigmoid(np.einsum("dpk,dk->dp", _design(age, talent), self.survival[position]))
+    def survival_prob(
+        self, position: str, age: np.ndarray, talent: np.ndarray, draft: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """P(plays next season); `age` and `talent` are (draws, players);
+        `draft` the next season's `draft_terms` (players, 2), used if the
+        position's survival model has them."""
+        x = _design(age, talent, self._draft(position, "survival", draft, age.shape))
+        return _sigmoid(np.einsum("dpk,dk->dp", x, self.survival[position]))
+
+    def _draft(self, position: str, model: str, draft: np.ndarray | None, shape: tuple) -> np.ndarray | None:
+        on = position in (self.draft_survival if model == "survival" else self.draft_games)
+        if not on:
+            return None
+        if draft is None:
+            raise ValueError(f"{position} {model} model needs draft terms")
+        return np.broadcast_to(draft, (*shape, draft.shape[-1]))
 
     def games_mean(
-        self, position: str, age: np.ndarray, talent: np.ndarray, injury: np.ndarray | None = None
+        self, position: str, age: np.ndarray, talent: np.ndarray, injury: np.ndarray | None = None,
+        draft: np.ndarray | None = None,
     ) -> np.ndarray:
         """Expected share of games played; `injury` is the season's
         `injury_terms` (used only if the model has injury terms)."""
         x = _design(age, talent, injury if self.injury else None, self.games_knot.get(position))
+        d = self._draft(position, "games", draft, age.shape)
+        if d is not None:
+            x = np.concatenate([x, d], axis=-1)
         return np.clip(_sigmoid(np.einsum("dpk,dk->dp", x, self.games[position])), 1e-6, 1 - 1e-6)
 
     def games_share(
         self, position: str, age: np.ndarray, talent: np.ndarray, rng: np.random.Generator,
-        injury: np.ndarray | None = None,
+        injury: np.ndarray | None = None, draft: np.ndarray | None = None,
     ) -> np.ndarray:
         """Share of a season's games played, drawn with season-to-season spread."""
-        p = self.games_mean(position, age, talent, injury)
+        p = self.games_mean(position, age, talent, injury, draft)
         n, phi = self.season_games, self.games_dispersion[position]
         if phi <= 1.0 or n <= 1:
             return p
@@ -231,6 +277,7 @@ def injury_history_terms(keys: pl.DataFrame, injury: pl.DataFrame, groups: bool 
 def availability_rows(
     talent: pl.DataFrame, player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of,
     injury: pl.DataFrame | None = None, groups: bool = False, lagged: bool = False,
+    static: pl.DataFrame | None = None,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Training rows for the games and survival models.
 
@@ -259,6 +306,9 @@ def availability_rows(
         "player_id", "season", "position", age="age_sept1", talent="talent_mean",
         successes=pl.min_horizontal("games_played", "games"), trials="games",
     )
+    if static is not None:
+        games = games.with_columns(draft=pl.Series(_draft_cols(games, static, pl.col("season")).tolist(),
+                                                   dtype=pl.List(pl.Float64)))
     played = talent.filter(pl.col("games_played") > 0).select("player_id", "season").unique()
     survival = (
         base.filter((pl.col("games_played") > 0) & (pl.col("season") + 1).is_in(complete.implode()))
@@ -276,7 +326,9 @@ def availability_rows(
     return games, survival
 
 
-def ppg_survival_rows(player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of, first: int) -> pl.DataFrame:
+def ppg_survival_rows(
+    player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of, first: int, static: pl.DataFrame | None = None,
+) -> pl.DataFrame:
     """Survival rows from points per game rather than fitted talent, from
     season `first` on: fitted talent starts in each position's fit window
     (2013 for RB/WR), which holds very few old players, and the model then
@@ -286,13 +338,18 @@ def ppg_survival_rows(player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_
     complete = season_games(schedules).filter(pl.col("last_gameday") < as_of)["season"]
     played = player_seasons.filter(pl.col("games_played") > 0)
     nxt = played.select("player_id", pl.col("season") - 1, next_played=pl.lit(1))
-    return (
+    rows = (
         played.filter(pl.col("age_sept1").is_not_null() & (pl.col("season") >= first)
                       & (pl.col("season") + 1).is_in(complete.implode()))
         .join(nxt, on=["player_id", "season"], how="left")
-        .select("position", age="age_sept1", talent="fpts_per_game",
-                successes=pl.col("next_played").fill_null(0), trials=pl.lit(1))
     )
+    out = rows.select("position", age="age_sept1", talent="fpts_per_game",
+                      successes=pl.col("next_played").fill_null(0), trials=pl.lit(1))
+    if static is not None:
+        # Draft terms for the season survived into (s + 1).
+        out = out.with_columns(draft=pl.Series(_draft_cols(rows, static, pl.col("season") + 1).tolist(),
+                                               dtype=pl.List(pl.Float64)))
+    return out
 
 
 def injury_share(player_seasons: pl.DataFrame, injury: pl.DataFrame, complete: list[int]) -> dict[str, float]:
@@ -309,43 +366,57 @@ def injury_share(player_seasons: pl.DataFrame, injury: pl.DataFrame, complete: l
     return {p: float(m / a) if a > 0 else 0.0 for p, m, a in rows.select("position", "missed", "absent").iter_rows()}
 
 
-def fit_games(rows: pl.DataFrame, knot: float | None, injury: bool, groups: bool) -> Logistic:
+def fit_games(rows: pl.DataFrame, knot: float | None, injury: bool, groups: bool, draft: bool = False) -> Logistic:
     inj = np.array(rows["injury"].to_list()) if injury else None
     x = _design(rows["age"].to_numpy(), rows["talent"].to_numpy(), inj, knot)
-    return fit_logistic(x, rows["successes"].to_numpy(), rows["trials"].to_numpy(),
-                        ridge_vector(x.shape[1], len(GROUPS) if injury and groups else 0))
+    ridge = ridge_vector(x.shape[1], len(GROUPS) if injury and groups else 0)
+    if draft:
+        d = np.array(rows["draft"].to_list())
+        x, ridge = np.concatenate([x, d], axis=1), np.concatenate([ridge, np.full(d.shape[1], BASE_RIDGE)])
+    return fit_logistic(x, rows["successes"].to_numpy(), rows["trials"].to_numpy(), ridge)
 
 
 def fit_availability(
     talent: pl.DataFrame, player_seasons: pl.DataFrame, schedules: pl.DataFrame, as_of,
     injury: pl.DataFrame | None = None, hinge_quantile: float | None = None, injury_groups: bool = False,
-    lagged: bool = False, survival_first: int | None = None,
+    lagged: bool = False, survival_first: int | None = None, static: pl.DataFrame | None = None,
+    draft_survival: tuple[str, ...] = (), draft_games: tuple[str, ...] = (),
 ) -> AvailabilityModel:
     """Games and survival models per position. `injury` (injury_seasons) adds
     injury terms to the games model; `hinge_quantile` its talent hinge.
     `survival_first` trains survival on points per game from that season on
-    instead of fitted talent (`ppg_survival_rows`)."""
+    instead of fitted talent (`ppg_survival_rows`). `draft_survival` and
+    `draft_games` add `draft_terms` (from `static`, the player_static table)
+    to those positions' models."""
+    if (draft_survival or draft_games) and static is None:
+        raise ValueError("draft terms need the player_static table")
     games_rows, survival_rows = availability_rows(
-        talent, player_seasons, schedules, as_of, injury, injury_groups, lagged
+        talent, player_seasons, schedules, as_of, injury, injury_groups, lagged,
+        static if draft_games else None,
     )
     if survival_first is not None:
         positions = talent["position"].unique().to_list()
         survival_rows = ppg_survival_rows(player_seasons.filter(pl.col("position").is_in(positions)),
-                                          schedules, as_of, survival_first)
+                                          schedules, as_of, survival_first, static if draft_survival else None)
+    elif draft_survival:
+        raise ValueError("draft terms in survival need survival_first")
     games, survival, knots = {}, {}, {}
     for (position,), r in games_rows.sort("position").group_by("position", maintain_order=True):
         if hinge_quantile is not None:
             knots[position] = float(r["talent"].quantile(hinge_quantile))
-        games[position] = fit_games(r, knots.get(position), injury is not None, injury_groups)
+        games[position] = fit_games(r, knots.get(position), injury is not None, injury_groups,
+                                    draft=position in draft_games)
     for (position,), r in survival_rows.sort("position").group_by("position", maintain_order=True):
+        d = np.array(r["draft"].to_list()) if position in draft_survival else None
         survival[position] = fit_logistic(
-            _design(r["age"].to_numpy(), r["talent"].to_numpy()), r["successes"].to_numpy(), r["trials"].to_numpy(),
+            _design(r["age"].to_numpy(), r["talent"].to_numpy(), d), r["successes"].to_numpy(), r["trials"].to_numpy(),
         )
     complete = season_games(schedules).filter(pl.col("last_gameday") < as_of).sort("season")
     share = injury_share(player_seasons, injury, complete["season"].to_list()) if injury is not None else {}
     return AvailabilityModel(
         games=games, survival=survival, season_games=int(complete["games"][-1]), injury=injury is not None,
         injury_groups=injury_groups, games_knot=knots, injury_share=share,
+        draft_survival=tuple(draft_survival), draft_games=tuple(draft_games),
     )
 
 

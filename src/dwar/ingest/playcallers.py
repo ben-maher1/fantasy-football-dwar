@@ -19,7 +19,13 @@ from pathlib import Path
 import polars as pl
 
 from dwar.config import data_dir
-from dwar.ingest.cache import SchemaChangedError, latest_file, latest_schema, schema_of, write_files
+from dwar.ingest.cache import (
+    SchemaChangedError,
+    latest_file,
+    latest_schema,
+    schema_of,
+    write_files,
+)
 
 SOURCE = "playcallers"
 DATASET = "playcallers"

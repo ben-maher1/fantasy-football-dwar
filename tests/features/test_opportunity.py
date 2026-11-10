@@ -5,7 +5,12 @@ import polars as pl
 import pytest
 
 from dwar.config import load_scoring
-from dwar.features.opportunity import MIN_BUCKET_PLAYS, opportunity_weeks, plays, value_table
+from dwar.features.opportunity import (
+    MIN_BUCKET_PLAYS,
+    opportunity_weeks,
+    plays,
+    value_table,
+)
 
 
 def play(season: int, week: int, **kw) -> dict:
