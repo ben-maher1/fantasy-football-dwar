@@ -36,6 +36,7 @@ from dwar.value.availability import (
     status_effects,
     status_multiplier,
 )
+from dwar.value.old_star import keep_rates, latest_full_season, pull_back
 from dwar.value.projection import PositionDraws, future_situation, project_talent
 from dwar.value.replacement import (
     replacement_level,
@@ -365,6 +366,11 @@ def position_dwar(
             j = int(np.flatnonzero(cur)[0])
             talent[:, :, j] = np.where(in_cur[None], with_form, talent[:, :, j])
     talent = widen(talent, cfg.spread_factor.get(position, 1.0), axis=0)
+    if position in cfg.old_star:
+        o = cfg.old_star[position]
+        keep = keep_rates(tables.player_seasons, position, o.min_age, o.min_ppg, o.min_games, clock.complete)
+        last = latest_full_season(tables.player_seasons, latest["player_id"].to_list(), o.min_games)
+        talent = pull_back(talent, seasons, clock.current, last, keep, o.min_age, o.min_ppg, o.weight)
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
 

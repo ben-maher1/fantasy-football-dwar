@@ -167,6 +167,14 @@ def uses_situation(cfg: ModelConfig) -> bool:
     return any(cfg.situation_level.values()) or any(cfg.situation_range.values())
 
 
+class OldStar(_Frozen):
+    """Pull-back for old stars' future seasons (value/old_star.py)."""
+    min_age: float = 29.0     # age (Sept 1) in his latest full season
+    min_ppg: float = 12.0     # PPG in that season
+    min_games: int = 8        # games for a season to count as full
+    weight: float = Field(default=0.75, ge=0.0, le=1.0)  # share of the way toward the historical rule
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
@@ -180,6 +188,7 @@ class ValueConfig(_Frozen):
     games_hinge_quantile: float | None = None  # games model: talent stops adding games above this quantile
     games_lagged_talent: bool = False        # games model trained on last season's talent
     survival_first_season: int | None = None  # survival trained on points per game from this season on (else fitted talent)
+    old_star: dict[str, OldStar] = {}        # positions whose old stars' future seasons are pulled back
 
 
 def _read_yaml(path: Path) -> dict:
