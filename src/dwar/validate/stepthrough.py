@@ -90,7 +90,7 @@ class Settings:
     level_mean: np.ndarray | None = None
     rho_bump: np.ndarray | None = None      # fading season bump (season_bump): AR(1) rate and stationary SD
     sigma_bump: np.ndarray | None = None
-    gamma_usage: np.ndarray | None = None   # (draws, 2) usage effects (usage); None = off
+    gamma_usage: np.ndarray | None = None   # (draws, 2 or 3) usage effects (usage, + fill_in); None = off
     sigma_fluke: np.ndarray | None = None   # rookie season's own non-lasting boost/dip (rookie_fluke); None = off
     bump_first: bool = True                 # False: no bump in a player's first season
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
@@ -206,7 +206,7 @@ class Settings:
             rho_bump=take("rho_bump") if "rho_bump" in post else None,
             sigma_bump=take("sigma_bump") if "rho_bump" in post else None,
             sigma_fluke=take("sigma_fluke") if "sigma_fluke" in post else None,
-            gamma_usage=take("gamma_usage", width=2) if "gamma_usage" in post else None,
+            gamma_usage=take("gamma_usage") if "gamma_usage" in post else None,
             bump_first=bump_first,
         )
 

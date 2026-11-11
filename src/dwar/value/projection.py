@@ -58,7 +58,7 @@ class PositionDraws:
     ps_pick_z: np.ndarray | None = None    # (player_seasons,) the player's standardized log pick
     rho_form: np.ndarray | None = None     # (draws,) "form" mode: per-game decay of in-season form
     form_dev: np.ndarray | None = None     # (draws, player_seasons) form after each season's last game
-    gamma_usage: np.ndarray | None = None  # (draws, 2) usage effects (RB); None = off
+    gamma_usage: np.ndarray | None = None  # (draws, 2 or 3) usage effects (RB; + fill_in); None = off
     ps_usage_next: np.ndarray | None = None  # (player_seasons, 2) usage as of the next game
     qb_drift: np.ndarray | None = None     # (draws,) offseason drift per unit of QB rating
     qb_drift_low: np.ndarray | None = None

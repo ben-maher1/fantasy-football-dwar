@@ -15,6 +15,7 @@ import polars as pl
 from dwar.config import ScoringConfig, data_dir
 from dwar.features.asof import PLAY_COLUMNS, AsOfSnapshot
 from dwar.features.exits import flag_injury_exits
+from dwar.features.fill_in import flag_fill_ins
 from dwar.features.qb_rating import team_qb_ratings
 from dwar.features.scoring import fantasy_points
 
@@ -102,11 +103,8 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
         weeks = weeks.join(qb, on=["season", "week", "team"], how="left")
     else:
         weeks = weeks.with_columns(qb_rating=pl.lit(None, pl.Float64))
-    return (
-        weeks.join(positions, on=["player_id", "season"], how="left")
-        .filter(pl.col("position").is_in(SKILL_POSITIONS))
-        .sort("player_id", "gameday")
-    )
+    weeks = weeks.join(positions, on=["player_id", "season"], how="left").filter(pl.col("position").is_in(SKILL_POSITIONS))
+    return flag_fill_ins(weeks).sort("player_id", "gameday")
 
 
 def player_seasons(snap: AsOfSnapshot, weeks: pl.DataFrame) -> pl.DataFrame:

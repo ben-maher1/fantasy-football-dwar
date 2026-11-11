@@ -100,6 +100,11 @@ VARIANTS: dict[str, dict] = {
     # QB/WR/TE use.
     "rb_growth": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                   "usage": (POSITION,), "sampler": {"draws": 3500}, "growth": (POSITION,), "rookie_round1": (POSITION,)},
+    # 2026-11-11 (ben): a backup's points in games his team's lead back
+    # missed say about half as much about next season (features/fill_in.py).
+    # rb_fill = rb_usage + a shift in those games.
+    "rb_fill": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                "usage": (POSITION,), "fill_in": (POSITION,), "sampler": {"draws": 3500}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
@@ -265,6 +270,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     full = build_model_data(
         _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
+        fill_in=POSITION in cfg.fill_in,
     )
     if full.prospect_x_names != settings.prospect_names:
         raise ValueError(f"prospect columns differ: {full.prospect_x_names} vs {settings.prospect_names}")

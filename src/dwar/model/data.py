@@ -186,6 +186,7 @@ def build_model_data(
     opportunity: pl.DataFrame | None = None,
     reference_players: tuple[str, ...] | None = None,
     injury_exits: str = "keep",
+    fill_in: bool = False,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -209,6 +210,11 @@ def build_model_data(
     `injury_exits` "drop" leaves injury-exit games (features/exits.py:
     the player left early hurt) out of the observed points like short
     weeks; "flag" keeps them and marks them in `obs_exit`.
+
+    `fill_in` adds a third usage column: 1 in games the team's lead back
+    missed (player_weeks.fill_in, features/fill_in.py), so the model learns
+    that bump instead of reading it as talent. Forecasts assume the lead
+    back plays (0 in ps_usage_next).
 
     `reference_players` (a fit's `player_ids`) sets the draft-pick and
     combine standardization, so data built later for new players matches
@@ -341,6 +347,11 @@ def build_model_data(
         flag = ext["_next"].to_numpy()
         ps_usage_next = np.zeros((ps.height, 2))
         ps_usage_next[ext["ps_idx"].to_numpy()[flag]] = u[flag]
+        if fill_in:
+            if "fill_in" not in obs.columns:
+                raise ValueError("fill_in needs player_weeks.fill_in")
+            obs_usage = np.column_stack([obs_usage, obs["fill_in"].fill_null(False).to_numpy().astype(float)])
+            ps_usage_next = np.column_stack([ps_usage_next, np.zeros(ps.height)])
     obs_qb = (obs["qb_rating"].fill_null(0.0).to_numpy().astype(float) if "qb_rating" in obs.columns
               else np.zeros(obs.height))
     ends = (pl.DataFrame({"ps_idx": obs["ps_idx"], "week": obs["week"], "q": obs_qb})
