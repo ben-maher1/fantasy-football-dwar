@@ -28,14 +28,17 @@ from dwar.features.player_tables import PlayerTables
 from dwar.features.situation import Covariates
 from dwar.model.fit import FitResult
 from dwar.model.talent import for_position
+from dwar.value import late_pick
 from dwar.value.availability import (
     AvailabilityDraws,
+    draft_terms,
     fit_availability,
     injury_terms,
     season_games,
     status_effects,
     status_multiplier,
 )
+from dwar.value.old_star import keep_rates, latest_full_season, pull_back
 from dwar.value.projection import PositionDraws, future_situation, project_talent
 from dwar.value.replacement import (
     replacement_level,
@@ -224,7 +227,8 @@ def value_inputs(
         )
     availability = fit_availability(
         talent, tables.player_seasons, schedules, tables.as_of, injury.seasons if injury else None,
-        cfg.games_hinge_quantile, lagged=cfg.games_lagged_talent,
+        cfg.games_hinge_quantile, lagged=cfg.games_lagged_talent, survival_first=cfg.survival_first_season,
+        static=tables.player_static, draft_survival=cfg.draft_survival, draft_games=cfg.draft_games,
     ).draw(len(idx), rng)
     situation = situation or {}
 
@@ -332,6 +336,17 @@ class _InjuryPath:
             self.total[season] = self.season_games * (1.0 - share) * self.share
 
 
+def _draft_info(tables: PlayerTables, latest: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Per player in `latest`: the season his career year 1 is (draft year,
+    or first season played if undrafted) and his draft pick (nan if none)."""
+    s = latest.select("player_id").join(
+        tables.player_static.select("player_id", "draft_year", "draft_pick", "first_season"),
+        on="player_id", how="left", maintain_order="left",
+    )
+    start = s.select(pl.coalesce("draft_year", "first_season").cast(pl.Float64).fill_null(-100.0)).to_series().to_numpy()
+    return start, s["draft_pick"].cast(pl.Float64).to_numpy()
+
+
 def position_dwar(
     position: str, r: FitResult, inputs: ValueInputs, tables: PlayerTables,
     fmt: LeagueFormat, cfg: ValueConfig, rng: np.random.Generator,
@@ -360,11 +375,22 @@ def position_dwar(
         in_cur = last_season == clock.current
         if cur.any() and in_cur.any():
             ps_idx = latest["ps_idx"].to_numpy()
-            form = pd_.form_rest(ps_idx, remaining)
+            form = pd_.form_rest(ps_idx, remaining) + pd_.usage_rest(ps_idx)
             with_form = pd_.expected_points(pd_.latent[:, ps_idx] + form)
             j = int(np.flatnonzero(cur)[0])
             talent[:, :, j] = np.where(in_cur[None], with_form, talent[:, :, j])
     talent = widen(talent, cfg.spread_factor.get(position, 1.0), axis=0)
+    if position in cfg.old_star:
+        o = cfg.old_star[position]
+        keep = keep_rates(tables.player_seasons, position, o.min_age, o.min_ppg, o.min_games, clock.complete)
+        last = latest_full_season(tables.player_seasons, latest["player_id"].to_list(), o.min_games)
+        talent = pull_back(talent, seasons, clock.current, last, keep, o.min_age, o.min_ppg, o.weight)
+    if position in cfg.late_pick:
+        lp = cfg.late_pick[position]
+        last = latest_full_season(tables.player_seasons, latest["player_id"].to_list(), lp.min_games)
+        hit = late_pick.qualifying(last, tables.player_static, lp.min_round, lp.max_career_year, lp.min_ppg)
+        talent = late_pick.pull_back(talent, seasons, clock.current,
+                                     last["season"].fill_null(0).to_numpy().astype(float), hit, lp.factors)
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
 
@@ -379,14 +405,17 @@ def position_dwar(
     inj = _InjuryPath(inputs, position, latest["player_id"].to_list(), remaining, talent.shape[:2])
     if inputs.out_for_season:
         inj.multiplier = np.where(latest["player_id"].is_in(list(inputs.out_for_season)).to_numpy(), 0.0, inj.multiplier)
+    use_draft = position in av.draft_survival or position in av.draft_games
+    draft_start, draft_pick = _draft_info(tables, latest) if use_draft else (None, None)
     for j, season in enumerate(seasons[1:], start=1):
         terms = inj.terms(season)
+        draft = draft_terms(season - draft_start + 1, draft_pick) if use_draft else None  # (players, 2)
         # Survive from the previous season into this one, unless the player
         # has already played in it (or later).
-        p_survive = av.survival_prob(position, ages[:, :, j - 1], talent[:, :, j - 1])
+        p_survive = av.survival_prob(position, ages[:, :, j - 1], talent[:, :, j - 1], draft)
         survives = rng.random(alive.shape) < p_survive
         alive = np.where(season <= last_season, alive, alive * survives)
-        share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng, terms)
+        share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng, terms, draft)
         if season == clock.current:
             games = share * inj.multiplier * remaining
         else:

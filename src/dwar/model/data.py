@@ -59,6 +59,8 @@ class ModelData:
     ps_career_games: np.ndarray | None = None  # (n_ps,) career games before that season's first game
     ps_career_games_end: np.ndarray | None = None  # (n_ps,) career games after that season's last game
     obs_exit: np.ndarray | None = None      # (n_obs,) injury-exit game (features/exits.py), kept only with injury_exits="flag"
+    obs_usage: np.ndarray | None = None     # (n_obs, 2) usage from the season's earlier games (usage_design); None without usage columns
+    ps_usage_next: np.ndarray | None = None  # (n_ps, 2) usage as of a next game after each player-season's last (value layer)
 
     @property
     def n_obs(self) -> int:
@@ -145,6 +147,33 @@ def _per_season(ps: pl.DataFrame, covariates: pl.DataFrame | None, name: str) ->
     return x
 
 
+CARRY_SHARE_REF = 0.30  # about the average RB game's carry share (2013-2019), the usage term's zero
+USAGE_NAMES = ("carry_share_l3", "snap_share_change")
+
+
+def usage_design(obs: pl.DataFrame) -> np.ndarray:
+    """(n_obs, 2) usage known before each game, from the same season's
+    earlier games only (no lookahead): carry share over the last (up to) 3
+    games less CARRY_SHARE_REF, and snap share over the last 3 less the
+    season's games before those (needs 4 earlier games). 0 when unknown
+    (a season's first game, or no snap counts before 2013)."""
+    snap = pl.col("offense_pct") if "offense_pct" in obs.columns else pl.lit(None, pl.Float64)
+    o = obs.with_row_index("_u").sort("player_id", "season", "week").with_columns(
+        _cs=pl.col("carry_share").cast(pl.Float64), _sn=snap.cast(pl.Float64))
+    by = ["player_id", "season"]
+    o = o.with_columns(
+        _k=pl.int_range(pl.len()).over(by),
+        _cs3=pl.col("_cs").shift(1).rolling_mean(3, min_samples=1).over(by),
+        _sn3=pl.col("_sn").shift(1).rolling_mean(3, min_samples=3).over(by),
+        _snpre=pl.col("_sn").shift(4).cum_sum().over(by) / (pl.int_range(pl.len()).over(by) - 3),
+    )
+    o = o.with_columns(
+        u1=(pl.col("_cs3") - CARRY_SHARE_REF).fill_null(0.0).fill_nan(0.0),
+        u2=pl.when(pl.col("_k") >= 4).then(pl.col("_sn3") - pl.col("_snpre")).otherwise(None).fill_null(0.0).fill_nan(0.0),
+    ).sort("_u")
+    return o.select("u1", "u2").to_numpy().astype(float)
+
+
 def build_model_data(
     tables: PlayerTables,
     position: str = "WR",
@@ -157,6 +186,7 @@ def build_model_data(
     opportunity: pl.DataFrame | None = None,
     reference_players: tuple[str, ...] | None = None,
     injury_exits: str = "keep",
+    fill_in: bool = False,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -181,6 +211,11 @@ def build_model_data(
     `injury_exits` "drop" leaves injury-exit games (features/exits.py:
     the player left early hurt) out of the observed points like short
     weeks; "flag" keeps them and marks them in `obs_exit`.
+
+    `fill_in` adds a third usage column: 1 in games the team's lead back
+    missed (player_weeks.fill_in, features/fill_in.py), so the model learns
+    that bump instead of reading it as talent. Forecasts assume the lead
+    back plays (0 in ps_usage_next).
 
     `reference_players` (a fit's `player_ids`) sets the draft-pick and
     combine standardization, so data built later for new players matches
@@ -310,6 +345,24 @@ def build_model_data(
         prior_games, on=["player_id", "season", "week"], how="left"
     ).sort("_row")
     y = obs["fpts"].to_numpy().astype(float)
+    obs_usage = usage_design(obs) if "carry_share" in obs.columns else None
+    ps_usage_next = None
+    if obs_usage is not None:
+        # One extra (unplayed) game after each player-season's last, so its
+        # usage is what the next game would see.
+        nxt = (obs.group_by("player_id", "season", "ps_idx").agg(pl.col("week").max() + 1)
+               .with_columns(_next=pl.lit(True)))
+        cols = ["player_id", "season", "week", "carry_share", *(["offense_pct"] if "offense_pct" in obs.columns else [])]
+        ext = pl.concat([obs.select(*cols, "ps_idx").with_columns(_next=pl.lit(False)), nxt], how="diagonal_relaxed")
+        u = usage_design(ext)
+        flag = ext["_next"].to_numpy()
+        ps_usage_next = np.zeros((ps.height, 2))
+        ps_usage_next[ext["ps_idx"].to_numpy()[flag]] = u[flag]
+        if fill_in:
+            if "fill_in" not in obs.columns:
+                raise ValueError("fill_in needs player_weeks.fill_in")
+            obs_usage = np.column_stack([obs_usage, obs["fill_in"].fill_null(False).to_numpy().astype(float)])
+            ps_usage_next = np.column_stack([ps_usage_next, np.zeros(ps.height)])
     obs_qb = (obs["qb_rating"].fill_null(0.0).to_numpy().astype(float) if "qb_rating" in obs.columns
               else np.zeros(obs.height))
     ends = (pl.DataFrame({"ps_idx": obs["ps_idx"], "week": obs["week"], "q": obs_qb})
@@ -351,6 +404,8 @@ def build_model_data(
         obs_week=obs["week"].to_numpy().astype(np.int64),
         obs_career_games=obs["career_games"].fill_null(0).to_numpy().astype(float),
         obs_qb=obs_qb,
+        obs_usage=obs_usage,
+        ps_usage_next=ps_usage_next,
         ps_qb_end=ps_qb_end,
         ps_career_games=cg["cg0"].to_numpy().astype(float),
         ps_career_games_end=cg["cg1"].to_numpy().astype(float),

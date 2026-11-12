@@ -58,6 +58,8 @@ class PositionDraws:
     ps_pick_z: np.ndarray | None = None    # (player_seasons,) the player's standardized log pick
     rho_form: np.ndarray | None = None     # (draws,) "form" mode: per-game decay of in-season form
     form_dev: np.ndarray | None = None     # (draws, player_seasons) form after each season's last game
+    gamma_usage: np.ndarray | None = None  # (draws, 2 or 3) usage effects (RB; + fill_in); None = off
+    ps_usage_next: np.ndarray | None = None  # (player_seasons, 2) usage as of the next game
     qb_drift: np.ndarray | None = None     # (draws,) offseason drift per unit of QB rating
     qb_drift_low: np.ndarray | None = None
     ps_qb_end: np.ndarray | None = None    # (player_seasons,) QB rating in the season's last game
@@ -114,6 +116,14 @@ class PositionDraws:
         mean_decay = csum[:, n - 1] / n[None]                             # (draws, players)
         return np.where(remaining[None] > 0, self.form_dev[:, ps_idx] * mean_decay, 0.0)
 
+    def usage_rest(self, ps_idx: np.ndarray) -> np.ndarray | float:
+        """(draws, players) usage effect for the rest of the current season:
+        usage as of the next game, held (as in the step-through test);
+        0 without usage. Later seasons get none."""
+        if self.gamma_usage is None or self.ps_usage_next is None:
+            return 0.0
+        return self.gamma_usage @ self.ps_usage_next[ps_idx].T
+
     def growth_effect(self, ps_idx: np.ndarray, career_year: np.ndarray) -> np.ndarray:
         """(draws, players) growth term at `career_year` for the players of
         `ps_idx`; zeros when the fit has no growth terms."""
@@ -156,7 +166,8 @@ class PositionDraws:
             zero_value=d.zero_week_mean,
             eta=maybe("eta"),
             kappa=maybe("kappa"),
-            age_curve="hinge" if hinge else ("cubic" if "beta3" in posterior["posterior"] else "quadratic"),
+            age_curve="hinge" if hinge else ("cubic" if "beta3" in posterior["posterior"] else (
+                "late" if "age_late" in posterior["posterior"] else "quadratic")),
             growth=maybe("growth"),
             growth_pick=maybe("growth_pick"),
             career_year=getattr(d, "ps_career_year", None),
@@ -170,12 +181,14 @@ class PositionDraws:
             ps_qb_end=getattr(d, "ps_qb_end", None),
             fade=qb_fade(d.ps_player, d.ps_keys["season"].to_numpy(), d.ps_qb_end)
             if fade_qb and getattr(d, "ps_qb_end", None) is not None else None,
-            beta3=maybe("beta3"),
+            beta3=maybe("beta3") if "beta3" in posterior["posterior"] else maybe("age_late"),
             lam_tau=maybe("lam_tau"),
             ps_career_games_end=getattr(d, "ps_career_games_end", None),
             sigma_young=maybe("sigma_young"),
             rho_season=maybe("rho_season"),
             level_mean=maybe("level_mean"),
+            gamma_usage=maybe("gamma_usage"),
+            ps_usage_next=getattr(d, "ps_usage_next", None),
         )
 
     def age_effect(self, age: np.ndarray) -> np.ndarray:

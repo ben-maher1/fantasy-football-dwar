@@ -10,4 +10,10 @@ spread_factor:           # set from the latest backtest (validate summary "sprea
 short_by_role: [QB]      # QB short-game chance by preseason role, QB1 or not (situation factors step)
 games_hinge_quantile: 0.75  # games played stop rising with talent above the 75th percentile (injury step)
 games_lagged_talent: true  # games model pairs games with last season's talent (injury step)
+old_star:                # RBs 29+ off a 12+ PPG season: future seasons 75% toward last PPG x historical keep-rate (ben, 2026-11-10; reports/old_star)
+  RB: {min_age: 29, min_ppg: 12, min_games: 8, weight: 0.75}
+draft_survival: [RB]     # early-career draft terms in survival (validate/draft_avail.py: RB better 2013-22 and 2023-25)
+draft_games: [RB, QB]    # ... and in games played (RB tie/better, QB better in both periods)
+late_pick: {}             # OFF (ben, 2026-11-10): round-3+ scaling cut productive late-round stars too hard; smoother fades no clearer win (reports/late_pick). Was RB: {min_round: 3, max_career_year: 3, min_ppg: 8, min_games: 8, factors: [1.0, 0.85, 0.80]}
+survival_first_season: 1999  # survival trained on points per game since 1999, not fitted talent (2013+ for RB/WR): too few old players otherwise (validate/survival.py, 2026-11-10)
 injury_history: true     # weeks missed to injury in the last two seasons + current injury status (injury step)

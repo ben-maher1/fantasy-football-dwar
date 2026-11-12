@@ -3,6 +3,7 @@
     latent[i,s]    = level[i,s] + age_effect(age[i,s]) + season_x @ eta
     age_effect(a)  = beta1*(a-26) + beta2*(a-26)^2         (quadratic, default)
                    = beta1*min(a-30, 0) + beta2*max(a-30, 0)   (hinge: two straight lines meeting at 30)
+                   = quadratic + beta3*max(a-28, 0)            (late: extra yearly decline past 28)
     level[i,s]     = level[i,s-1] + tau*exp(season_vol_x @ kappa)*sqrt(gap)*z[i,s]
     latent[i,first] ~ Normal(prior_mean_i, prior_sd_i)   (before season covariates)
     center[i,s]    = link(latent[i,s])
@@ -59,6 +60,7 @@ from dwar.model.data import ModelData
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
 AGE_KNOT = 30.0  # hinge age curve: where the slope may change
+LATE_KNOT = 28.0  # late age curve: extra straight-line decline starts here
 PLATEAU = (24.0, 28.0)  # plateau age curve: rises to the first age, flat to the second, then falls
 AGE_SHIFT_MAX = 5.0  # talent-shifted age curve: the peak moves at most this many years
 KAPPA_SD = 0.5  # log step-size change per range flag: 0.4 is a step about 50% larger
@@ -179,6 +181,11 @@ def age_curve_effect(age_c, beta1, beta2, curve: str = "quadratic", beta3=0.0):
     if curve == "hinge":
         a = age_c - (AGE_KNOT - 26.0)
         return beta1 * (a - abs(a)) / 2 + beta2 * (a + abs(a)) / 2
+    if curve == "late":
+        # Quadratic plus a straight-line change in slope past LATE_KNOT
+        # (beta3 per year; negative = a steeper late decline).
+        late = age_c - (LATE_KNOT - 26.0)
+        return beta1 * age_c + beta2 * age_c**2 + beta3 * (late + abs(late)) / 2
     if curve == "plateau":
         # beta1: yearly rise before PLATEAU[0]; beta2, beta3: linear and
         # squared fall after PLATEAU[1]; flat between.
@@ -300,7 +307,8 @@ def build_talent_model(
     opportunity_years: int = 0, game_steps: bool = False, game_mode: str = "walk",
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
-    season_bump: bool = False, season_bump_first: bool = True,
+    season_bump: bool = False, season_bump_first: bool = True, rookie_fluke: bool = False,
+    usage: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -399,6 +407,8 @@ def build_talent_model(
             beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
             # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
             beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
+            if age_curve == "late":
+                beta3 = pm.Normal("age_late", 0.0, pr["beta1"])
         if age_curve != "talent":
             age_effect = age_curve_effect(d.ps_age_c, beta1, beta2, age_curve, beta3)
 
@@ -486,6 +496,14 @@ def build_talent_model(
             level = csum - csum[d.ps_start] + steps[d.ps_start]
 
         latent = level + age_effect
+        if rookie_fluke and len(rookies):
+            # A rookie season's own boost or dip that does not carry into
+            # year 2 (star over-forecast plan, option A, 2026-11-08).
+            sigma_fluke = pm.HalfNormal("sigma_fluke", pr["tau"])
+            fluke_z = pm.Normal("fluke_z", 0.0, 1.0, shape=len(rookies))
+            first_row = np.full(d.n_players, -1)
+            first_row[d.ps_player[d.ps_start == np.arange(d.n_ps)]] = np.flatnonzero(d.ps_start == np.arange(d.n_ps))
+            latent = pt.inc_subtensor(latent[first_row[rookies]], sigma_fluke * fluke_z)
         if season_bump:
             # A season's passing bump on top of the lasting level: an AR(1)
             # across a player's seasons, bump_s = rho^gap bump_prev + e_s,
@@ -597,6 +615,12 @@ def build_talent_model(
                 ysum = pt.cumsum(ysteps)
                 starts = np.maximum.accumulate(np.where(first, np.arange(d.n_obs), 0))
                 latent_obs = latent_obs + pt.set_subtensor(pt.zeros(d.n_obs)[order], ysum - ysum[starts])
+        if usage and d.obs_usage is not None:
+            # Recent usage known before each game (data.usage_design): carry
+            # share over the last 3 games and the change in snap share
+            # (RB plan step 3, ben 2026-11-09). Shrunk toward zero.
+            gamma_usage = pm.Normal("gamma_usage", 0.0, pr["covariate"], shape=d.obs_usage.shape[1])
+            latent_obs = latent_obs + pt.dot(d.obs_usage, gamma_usage)
         loc_obs = link(latent_obs, likelihood)
 
         if is_hurdle(likelihood):

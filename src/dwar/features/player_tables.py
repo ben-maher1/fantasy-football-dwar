@@ -15,6 +15,7 @@ import polars as pl
 from dwar.config import ScoringConfig, data_dir
 from dwar.features.asof import PLAY_COLUMNS, AsOfSnapshot
 from dwar.features.exits import flag_injury_exits
+from dwar.features.fill_in import flag_fill_ins
 from dwar.features.qb_rating import team_qb_ratings
 from dwar.features.scoring import fantasy_points
 
@@ -84,6 +85,16 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
     weeks = pl.concat([scored, snap_only], how="vertical_relaxed")
     weeks = weeks.join(snap.snaps.select("player_id", "game_id", *(c for c in ("offense_snaps", "offense_pct") if c in snap.snaps.columns)).unique(["player_id", "game_id"]),
                        on=["player_id", "game_id"], how="left")
+    if "carries" in snap.stats.columns:
+        # Carry share: the player's carries over his team's that game (all
+        # players' carries in the stats), for the RB usage term.
+        car = snap.stats.select("player_id", "game_id", "team", pl.col("carries").fill_null(0))
+        team_car = car.group_by("game_id", "team").agg(team_carries=pl.col("carries").sum())
+        weeks = (weeks.join(car.select("player_id", "game_id", "carries").unique(["player_id", "game_id"]),
+                            on=["player_id", "game_id"], how="left")
+                 .join(team_car, on=["game_id", "team"], how="left")
+                 .with_columns(carry_share=pl.when(pl.col("team_carries") > 0)
+                               .then(pl.col("carries").fill_null(0) / pl.col("team_carries")).otherwise(None)))
     weeks = flag_injury_exits(weeks)
     positions = _season_positions(snap, weeks.select("player_id", "season"))
     qb = team_qb_ratings(snap.stats)
@@ -92,11 +103,8 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
         weeks = weeks.join(qb, on=["season", "week", "team"], how="left")
     else:
         weeks = weeks.with_columns(qb_rating=pl.lit(None, pl.Float64))
-    return (
-        weeks.join(positions, on=["player_id", "season"], how="left")
-        .filter(pl.col("position").is_in(SKILL_POSITIONS))
-        .sort("player_id", "gameday")
-    )
+    weeks = weeks.join(positions, on=["player_id", "season"], how="left").filter(pl.col("position").is_in(SKILL_POSITIONS))
+    return flag_fill_ins(weeks).sort("player_id", "gameday")
 
 
 def player_seasons(snap: AsOfSnapshot, weeks: pl.DataFrame) -> pl.DataFrame:

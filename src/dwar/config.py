@@ -125,7 +125,7 @@ class ModelConfig(_Frozen):
     situation_level: dict[str, tuple[str, ...]] = {}
     situation_range: dict[str, tuple[str, ...]] = {}
     # Per-position age curve (model/talent.py): quadratic (default) or hinge.
-    age_curve: dict[str, Literal["quadratic", "hinge", "cubic", "plateau", "talent"]] = {}
+    age_curve: dict[str, Literal["quadratic", "hinge", "cubic", "plateau", "talent", "late"]] = {}
     # Usage and early-career terms (model/talent.py), each a list of positions:
     # weekly opportunity points + per-player efficiency, a first-round step in
     # the rookie prior, and career-year growth scaled by draft capital.
@@ -136,10 +136,16 @@ class ModelConfig(_Frozen):
     game_steps: tuple[str, ...] = ()  # talent also steps after every game (model/talent.py)
     game_mode: str = "walk"           # "walk": lasting per-game steps; "form": decaying in-season form
     qb_drift: tuple[str, ...] = ()    # offseason talent drift with the QB rating (model/talent.py)
-    form_rho: float | None = None      # hold the form decay rate fixed ("form" mode); None = estimate it
+    form_rho: float | dict[str, float | None] | None = None  # hold the form decay rate fixed ("form" mode), per position if a dict; None = estimate it
+
+    def form_rho_for(self, position: str) -> float | None:
+        return self.form_rho.get(position) if isinstance(self.form_rho, dict) else self.form_rho
     season_rho: tuple[str, ...] = ()  # talent pulled toward average between seasons (rho_season; random walk otherwise)
     season_rho_mean: Literal["free", "vet"] = "free"  # what season_rho pulls toward
     season_bump: tuple[str, ...] = ()  # a fading per-season bump on top of the lasting level (rho_bump, sigma_bump)
+    usage: tuple[str, ...] = ()        # recent carry share + snap-share change shift each game (gamma_usage)
+    fill_in: tuple[str, ...] = ()      # + a shift in games the team's lead back missed (features/fill_in.py; needs usage)
+    rookie_fluke: tuple[str, ...] = ()  # a rookie season's own boost/dip that does not carry into year 2 (sigma_fluke)
     season_bump_first: bool = True     # False: no bump in a player's first season (starts in his second)
     tau_y3: tuple[str, ...] = ()      # first-round picks' larger offseason step into career year 3 (lam_y3)
     tau_early: tuple[str, ...] = ()   # offseason talent step larger early in a career (model/talent.py lam_tau)
@@ -148,6 +154,7 @@ class ModelConfig(_Frozen):
     # College prospect metrics in the rookie prior, by position (features/prospect.py METRICS).
     prospect: dict[str, tuple[str, ...]] = {}
     first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one
+    tune_by_position: dict[str, int] = {}   # sampler tuning steps where a position needs more than `sampler.tune`
     draws_by_position: dict[str, int] = {}  # sampler draws where a position needs more than `sampler.draws`
 
     def likelihood_for(self, position: str) -> str:
@@ -163,6 +170,23 @@ def uses_situation(cfg: ModelConfig) -> bool:
     return any(cfg.situation_level.values()) or any(cfg.situation_range.values())
 
 
+class OldStar(_Frozen):
+    """Pull-back for old stars' future seasons (value/old_star.py)."""
+    min_age: float = 29.0     # age (Sept 1) in his latest full season
+    min_ppg: float = 12.0     # PPG in that season
+    min_games: int = 8        # games for a season to count as full
+    weight: float = Field(default=0.75, ge=0.0, le=1.0)  # share of the way toward the historical rule
+
+
+class LatePick(_Frozen):
+    """Pull-back for productive young late picks (value/late_pick.py)."""
+    min_round: int = 3          # drafted in this round or later, or undrafted
+    max_career_year: int = 3    # latest full season in career years 1-3
+    min_ppg: float = 8.0        # with this PPG or more
+    min_games: int = 8          # games for a season to count as full
+    factors: tuple[float, ...] = (1.0, 0.85, 0.80)  # talent scale 1, 2, 3+ seasons after it
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
@@ -175,6 +199,11 @@ class ValueConfig(_Frozen):
     injury_history: bool = False             # injury history in the games model + current-status cut
     games_hinge_quantile: float | None = None  # games model: talent stops adding games above this quantile
     games_lagged_talent: bool = False        # games model trained on last season's talent
+    survival_first_season: int | None = None  # survival trained on points per game from this season on (else fitted talent)
+    draft_survival: tuple[str, ...] = ()     # positions whose survival model has early-career draft terms
+    draft_games: tuple[str, ...] = ()        # ... and games model
+    old_star: dict[str, OldStar] = {}
+    late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
 
 
 def _read_yaml(path: Path) -> dict:

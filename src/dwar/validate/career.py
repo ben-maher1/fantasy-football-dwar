@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import replace
@@ -39,7 +40,10 @@ from dwar.validate.stepthrough import DISCOUNT, HORIZON, Settings, step_through
 
 log = logging.getLogger(__name__)
 
-POSITION = "WR"
+# Position under test; DWAR_POSITION=RB runs the same variants for RBs
+# (plan "game-by-game RB model and usage tests", ben 2026-11-09), with
+# results in experiments/career_rb.
+POSITION = os.environ.get("DWAR_POSITION", "WR")
 FIRST_SEASON = 2013
 FIT_AS_OF = date(2020, 8, 1)      # before the 2020 season: the fit sees 2013-2019
 TEST_SEASONS = (2020, 2021, 2022)
@@ -71,6 +75,38 @@ VARIANTS: dict[str, dict] = {
     # Variants start from config/model.yaml, which now has the game-by-game
     # terms on, so earlier variants turn off what they lacked.
     "base": {"game_steps": (), "qb_drift": ()},  # growth and first-round step on
+    # RB step 1: the current RB model (season level; no QB drift, growth
+    # or first-round step, as config/model.yaml has for RB) vs the
+    # game-by-game model with young steps. Situation factors are off in this
+    # harness for both.
+    "rb_base": {"game_steps": (), "qb_drift": (), "young_steps": (), "sampler": {"draws": 3500}},
+    "rb_career": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                  "sampler": {"draws": 3500}},
+    # RB step 3: + recent carry share and snap-share change (step 2 found
+    # both predict rb_career's misses in all four periods).
+    "rb_usage": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                 "usage": (POSITION,), "sampler": {"draws": 3500}},
+    # 2026-11-10 (ben): star RBs past 29 ran ~3 PPG high a season out, and
+    # backs at ~15.6 PPG at 30 went 11.8 / 8.1 / 7.0 after (model: about
+    # 15 / 12 / 10). rb_late = rb_usage + an extra straight-line decline past 28.
+    # Result: tie in all three periods (discounted log +.003 / +.001 / -.002);
+    # age_late came out near zero (+0.11 / -0.01 / +0.02, sd ~0.1). Old RBs
+    # as a group (6+ PPG at 29+) are forecast well; only the ~10 star cases
+    # run high. Not kept.
+    "rb_late": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                "usage": (POSITION,), "sampler": {"draws": 3500}, "age_curve": {POSITION: "late"}},
+    # 2026-11-10 (ben): productive young RBs drafted in rounds 3-7 or
+    # undrafted ran 1.0-1.4 PPG below rb_usage's forecasts in career years
+    # 2-4 (all four periods). rb_growth = rb_usage + the draft-scaled growth
+    # steps at career years 2 and 3 and the first-round rookie step that
+    # QB/WR/TE use.
+    "rb_growth": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                  "usage": (POSITION,), "sampler": {"draws": 3500}, "growth": (POSITION,), "rookie_round1": (POSITION,)},
+    # 2026-11-11 (ben): a backup's points in games his team's lead back
+    # missed say about half as much about next season (features/fill_in.py).
+    # rb_fill = rb_usage + a shift in those games.
+    "rb_fill": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                "usage": (POSITION,), "fill_in": (POSITION,), "sampler": {"draws": 3500}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
@@ -162,6 +198,10 @@ VARIANTS: dict[str, dict] = {
     # bump vs start-SD trade-off can mix (ben, 2026-11-08).
     "bumpl": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 7000, "tune": 2000},
               "fade_qb": True, "young_steps": (POSITION,), "season_bump": (POSITION,)},
+    # Rookie season's own boost/dip that does not carry into year 2
+    # (star over-forecast plan option A; ben approved 2026-11-08).
+    "fluke": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+              "fade_qb": True, "young_steps": (POSITION,), "rookie_fluke": (POSITION,)},
     "y3": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
            "fade_qb": True, "young_steps": (POSITION,), "tau_y3": (POSITION,)},
     # young scored 5 seasons out at 0.80 (ben, 2026-11-07: test before
@@ -194,7 +234,7 @@ for _m in PROSPECT_METRICS:
 
 
 def root(name: str, period: str = "dev") -> Path:
-    base = data_dir() / "experiments" / "career"
+    base = data_dir() / "experiments" / ("career" if POSITION == "WR" else f"career_{POSITION.lower()}")
     return base / name if period == "dev" else base / period / name
 
 
@@ -251,6 +291,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     full = build_model_data(
         _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
+        fill_in=POSITION in cfg.fill_in,
         prospect_covariates=None if prospect is None else prospect.select("player_id", *cfg.prospect[POSITION]),
     )
     if full.prospect_x_names != settings.prospect_names:

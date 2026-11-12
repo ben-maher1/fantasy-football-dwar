@@ -54,7 +54,7 @@ class FitResult:
 # Started at zero instead of a random point: with a log-scale latent, a
 # random age-curve start (beta2 near +-2 at age 41) puts exp() past overflow.
 # age_shift is jittered: started at exactly 0, nutpie found no valid initial point.
-UNJITTERED = ("beta1", "beta2", "beta3", "age_slope_pre", "age_slope_post", "age_rise", "age_fall", "age_fall2")
+UNJITTERED = ("beta1", "beta2", "beta3", "age_slope_pre", "age_slope_post", "age_rise", "age_fall", "age_fall2", "age_late")
 
 
 def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
@@ -64,7 +64,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         round1=p in cfg.rookie_round1, growth=p in cfg.growth,
         opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
         game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
-        form_rho=cfg.form_rho, tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first,
+        form_rho=cfg.form_rho_for(p), tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first, rookie_fluke=p in cfg.rookie_fluke, usage=p in cfg.usage,
         young_steps=p in cfg.young_steps,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
@@ -74,7 +74,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
     # game-by-game WR fit (a form term per game) ran out of memory.
     with tempfile.TemporaryDirectory(dir=data_dir()) as tmp:
         nutpie.sample(
-            compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=s.tune, chains=s.chains, seed=cfg.seed,
+            compiled, draws=cfg.draws_by_position.get(p, s.draws), tune=cfg.tune_by_position.get(p, s.tune), chains=s.chains, seed=cfg.seed,
             progress_bar=False, save_warmup=False, zarr_store=zarr_store.LocalStore(tmp),
         )
         posterior = _compact(Path(tmp), d, cfg.likelihood_for(p))
@@ -239,6 +239,7 @@ def position_data(
         season_covariates=c.level if c is not None and c.level.width > 2 else None,
         season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
         injury_exits="drop" if position in cfg.injury_exits else "keep",
+        fill_in=position in cfg.fill_in,
         **extra,
     )
 
