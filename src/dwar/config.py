@@ -202,6 +202,8 @@ class ValueConfig(_Frozen):
     survival_first_season: int | None = None  # survival trained on points per game from this season on (else fitted talent)
     draft_survival: tuple[str, ...] = ()     # positions whose survival model has early-career draft terms
     draft_games: tuple[str, ...] = ()        # ... and games model
+    inactive_survival: tuple[str, ...] = ()  # positions whose survival model has last season's healthy non-playing share
+    inactive_games: tuple[str, ...] = ()     # ... and games model
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
 
