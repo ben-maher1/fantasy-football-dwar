@@ -65,7 +65,7 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         opportunity=p in cfg.opportunity, opportunity_years=cfg.opportunity_years,
         game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
         form_rho=cfg.form_rho_for(p), tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first, rookie_fluke=p in cfg.rookie_fluke, usage=p in cfg.usage,
-        young_steps=p in cfg.young_steps,
+        young_steps=p in cfg.young_steps, early_noise=p in cfg.early_noise, pick_sd=p in cfg.pick_sd,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)

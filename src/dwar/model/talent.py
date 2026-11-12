@@ -202,6 +202,7 @@ EFFICIENCY_PRIOR = {"sqrt": 0.3, "log": 0.1}  # sd of the per-player efficiency 
 GAME_STEP_PRIOR = {"sqrt": 0.1, "log": 0.03}  # sd of the per-game step scale
 EARLY_GAMES = 17.0  # career games over which the early-career boost to game steps fades (by 1/e)
 EARLY_SEASON_GAMES = 34.0  # the same for the offseason step (tau_early)
+EARLY_NOISE_GAMES = 6.0   # career games over which early games' extra weekly noise fades (early_noise), by 1/e
 
 
 def season_early(career_games):
@@ -308,7 +309,7 @@ def build_talent_model(
     qb_drift: bool = False, form_rho: float | None = None, tau_early: bool = False, tau_y3: bool = False,
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
     season_bump: bool = False, season_bump_first: bool = True, rookie_fluke: bool = False,
-    usage: bool = False,
+    usage: bool = False, early_noise: bool = False, pick_sd: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -349,7 +350,16 @@ def build_talent_model(
     With `young_steps` ("form" mode), young players' talent also takes a
     lasting step after each game, sigma_young * exp(-career games /
     EARLY_SEASON_GAMES), carried into later games and seasons like the
-    "walk" mode's steps; veterans' steps fade to about zero."""
+    "walk" mode's steps; veterans' steps fade to about zero.
+
+    With `early_noise` (hurdle likelihoods), a game's weekly noise scale is
+    sigma * exp(lam_noise * exp(-career games before it / EARLY_NOISE_GAMES)):
+    a player's first games can be noisier signals of his talent than later
+    ones (ben, 2026-11-12). Talent is still defined at the base sigma.
+
+    With `pick_sd`, the rookie prior's spread depends on draft capital:
+    sigma_rookie * exp(sd_pick * log_pick_z + sd_undrafted * undrafted), so
+    late picks' priors can be tighter (or wider) than early picks'."""
     use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
     if use_opp:
         seen = np.isfinite(d.x)
@@ -421,7 +431,12 @@ def build_talent_model(
         start = pt.zeros(d.n_players)
         if len(rookies):
             rookie_z = pm.Normal("rookie_z", 0.0, 1.0, shape=len(rookies))
-            start = pt.set_subtensor(start[rookies], rookie_mean[rookies] + sigma_rookie * rookie_z)
+            rookie_sd = sigma_rookie
+            if pick_sd:
+                sd_pick = pm.Normal("sd_pick", 0.0, 0.5)
+                sd_undrafted = pm.Normal("sd_undrafted", 0.0, 0.5)
+                rookie_sd = sigma_rookie * pt.exp(sd_pick * d.log_pick_z[rookies] + sd_undrafted * d.undrafted[rookies])
+            start = pt.set_subtensor(start[rookies], rookie_mean[rookies] + rookie_sd * rookie_z)
         mu_vet = pm.Normal("mu_vet", *pr["mu_vet"])
         sigma_vet = pm.HalfNormal("sigma_vet", pr["sigma_vet"])
         if len(vets):
@@ -636,7 +651,11 @@ def build_talent_model(
             # density of y sums both roots +-sqrt(y); the Jacobian 1/(2 sqrt y)
             # is constant in the parameters and dropped.
             z = np.sqrt(d.y[pos])
-            t = pm.StudentT.dist(nu=nu, mu=loc_obs[pos], sigma=sigma)
+            sigma_obs = sigma
+            if early_noise and d.obs_career_games is not None:
+                lam_noise = pm.Normal("lam_noise", 0.0, 1.0)
+                sigma_obs = sigma * pt.exp(lam_noise * np.exp(-d.obs_career_games[pos] / EARLY_NOISE_GAMES))
+            t = pm.StudentT.dist(nu=nu, mu=loc_obs[pos], sigma=sigma_obs)
             pm.Potential("fpts", pt.sum(pt.logaddexp(pm.logp(t, z), pm.logp(t, -z))))
             if use_opp:
                 # Weekly opportunity points on the sqrt scale, centered on

@@ -72,3 +72,20 @@ def test_no_lookahead(sim):
     before = j.filter(pl.col("season") < pl.col("last_season"))
     assert before.height > 100
     assert np.allclose(before["pred_mean"].to_numpy(), before["pred_mean_b"].to_numpy())
+
+
+def test_early_noise_flattens_early_games_only(sim):
+    from dataclasses import replace
+
+    from dwar.validate.stepthrough import _loglik
+
+    s = replace(true_settings(sim.data, False), lam_noise=np.full(S, 1.0))
+    base = true_settings(sim.data, False)
+    draw = np.zeros(2, dtype=int)
+    latent = np.array([2.0, 4.0])   # a particle near the week's points and one far off
+    def spread(st, cg):
+        ll = _loglik(st, latent, 4.0, draw, cg)
+        return ll[0] - ll[1]
+    # A first game separates near from far particles less than a veteran game does.
+    assert spread(s, 0.0) < spread(base, 0.0)
+    assert spread(s, 200.0) == pytest.approx(spread(base, 200.0), rel=1e-6)
