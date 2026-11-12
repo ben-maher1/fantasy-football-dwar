@@ -121,8 +121,20 @@ def test_season_covariates_must_be_complete(small):
 def test_prospect_covariates_slot(small):
     extra = pl.DataFrame({"player_id": ["B", "A", "C"], "breakout_age": [19.0, 20.0, 21.0]})
     d = build_model_data(small, first_season=2006, prospect_covariates=extra)
-    assert d.prospect_x_names[-1] == "breakout_age"
-    assert d.prospect_x[:, -1].tolist() == [20.0, 19.0, 21.0]
+    assert d.prospect_x_names[-1] == "breakout_age_z"
+    # z-scored on in-window players only (A and B; C's career began in 2001): mean 19.5, SD 0.707.
+    assert np.allclose(d.prospect_x[:, -1], np.array([20.0, 19.0, 21.0]) / 0.7071 - 19.5 / 0.7071, atol=1e-3)
+
+
+def test_prospect_covariates_missing_flag_and_reference(small):
+    extra = pl.DataFrame({"player_id": ["A", "C"], "recruit": [0.9, 0.8]})
+    d = build_model_data(small, first_season=2006, prospect_covariates=extra)
+    i, j = d.prospect_x_names.index("recruit_z"), d.prospect_x_names.index("recruit_missing")
+    b = d.player_ids.index("B")
+    assert d.prospect_x[b, i] == 0.0 and d.prospect_x[b, j] == 1.0
+    # Scored on a reference set's scale: the same in-window players give the same scale.
+    d2 = build_model_data(small, first_season=2006, prospect_covariates=extra, reference_players=("A", "B", "C"))
+    assert np.allclose(d2.prospect_x[:, i], d.prospect_x[:, i])
 
 
 def test_zero_week_mean():
