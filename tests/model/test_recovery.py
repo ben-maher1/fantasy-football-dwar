@@ -187,3 +187,17 @@ def test_form_recovered(recovered_form):
     for name, truth in sim.truth.items():
         lo, hi = interval(result.posterior, name, 0.5, 99.5)
         assert lo <= truth <= hi, f"{name}: {truth} outside 99% [{lo:.3f}, {hi:.3f}]"
+
+
+def test_early_noise_and_pick_sd_find_none_when_there_is_none(tmp_path):
+    """Simulated receivers have the same weekly noise in every game and one
+    rookie prior spread for every pick: the early-noise and pick-spread
+    terms (ben, 2026-11-12) must put zero inside their 99% intervals, the
+    convention above (at 95%, one of three misses about 14% of the time)."""
+    sim = simulate(n_players=200, seed=17)
+    cfg = core_config().model_copy(update={"early_noise": ("WR",), "pick_sd": ("WR",)})
+    result = fit(sim.data, cfg, tmp_path)
+    assert result.diagnostics.passed, result.diagnostics.failures
+    for name in ("lam_noise", "sd_pick", "sd_undrafted"):
+        lo, hi = interval(result.posterior, name, 0.5, 99.5)
+        assert lo < 0 < hi, (name, lo, hi)

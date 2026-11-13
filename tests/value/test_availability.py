@@ -169,3 +169,38 @@ def test_draft_columns_count_career_years_from_draft_or_first_season():
     d = _draft_cols(rows, static, pl.col("season"))
     assert np.allclose(d[:, 0], [1, 0, 1])           # D year 2, D year 5, U year 1
     assert np.isclose(d[0, 1], np.log(2.0))
+
+
+def test_inactive_share_counts_healthy_non_playing_games_only():
+    from dwar.value.availability import inactive_seasons
+
+    sched = pl.DataFrame({
+        "season": [2020] * 2 + [2021] * 2, "gameday": [date(2020, 9, 13), date(2020, 9, 20), date(2021, 9, 12),
+                                                     date(2021, 9, 19)],
+        "home_team": ["A", "A", "A", "A"], "away_team": ["B", "B", "B", "B"],
+    })
+    ps = pl.DataFrame({"player_id": ["P", "Q", "P"], "season": [2020, 2020, 2021], "games_played": [1, 1, 2]})
+    inj = pl.DataFrame({"player_id": ["Q"], "season": [2020], "missed": [1]})
+    # 2021 ends after as_of: not complete, so left out.
+    out = inactive_seasons(ps, inj, sched, date(2021, 1, 1)).sort("player_id")
+    assert out["season"].to_list() == [2020, 2020]
+    assert out["inactive"].to_list() == [0.5, 0.0]   # P sat one healthy; Q's miss was an injury
+
+
+def test_inactive_terms_flag_unknown_seasons():
+    from dwar.value.availability import inactive_terms
+
+    t = inactive_terms(np.array([0.5, 0.5]), np.array([True, False]))
+    assert np.allclose(t, [[0.5, 0.0], [0.0, 1.0]])
+
+
+def test_survival_prob_falls_with_inactive_share():
+    coefs = np.tile([2.0, 0.0, 0.0, 0.0, -2.0, 0.0], (10, 1))
+    draws = AvailabilityDraws({}, {}, {"WR": coefs}, 17, inactive_survival=("WR",))
+    age, tal = np.full((10, 2), 24.0), np.full((10, 2), 5.0)
+    with pytest.raises(ValueError):
+        draws.survival_prob("WR", age, tal)
+    from dwar.value.availability import inactive_terms
+
+    p = draws.survival_prob("WR", age, tal, inactive=inactive_terms(np.array([0.8, 0.0])))
+    assert (p[:, 0] < p[:, 1]).all()

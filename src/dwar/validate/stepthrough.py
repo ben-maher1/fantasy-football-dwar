@@ -38,6 +38,7 @@ from dwar.model.data import ModelData
 from dwar.model.talent import (
     AGE_SHIFT_MAX,
     EARLY_GAMES,
+    EARLY_NOISE_GAMES,
     GROWTH_YEARS,
     age_curve_effect,
     link,
@@ -95,6 +96,9 @@ class Settings:
     bump_first: bool = True                 # False: no bump in a player's first season
     lam_y3: np.ndarray | None = None        # first-round picks' boost to the step into career year 3 (tau_y3)
     sigma_young: np.ndarray | None = None   # young players' lasting per-game step (young_steps); None = off
+    lam_noise: np.ndarray | None = None     # early games' extra weekly noise (early_noise); None = off
+    sd_pick: np.ndarray | None = None       # rookie prior spread by draft capital (pick_sd); None = off
+    sd_undrafted: np.ndarray | None = None
     exit_rate: float = 0.0                  # chance a game is an injury exit (games left out of the fit)
     exit_points: np.ndarray | None = None   # points in past injury-exit games, drawn for simulated exits
     age_curve: str = "quadratic"            # "plateau": beta1-3 are age_rise/fall/fall2; "talent": peak shifts
@@ -203,6 +207,9 @@ class Settings:
             rho_season=take("rho_season") if "rho_season" in post else None,
             level_mean=take("level_mean") if "rho_season" in post else None,
             sigma_young=take("sigma_young") if "sigma_young" in post else None,
+            lam_noise=take("lam_noise") if "lam_noise" in post else None,
+            sd_pick=take("sd_pick") if "sd_pick" in post else None,
+            sd_undrafted=take("sd_undrafted") if "sd_pick" in post else None,
             rho_bump=take("rho_bump") if "rho_bump" in post else None,
             sigma_bump=take("sigma_bump") if "rho_bump" in post else None,
             sigma_fluke=take("sigma_fluke") if "sigma_fluke" in post else None,
@@ -241,14 +248,17 @@ def _growth(s: Settings, cy: int, pick_z: float) -> np.ndarray:
     return s.growth @ ind + s.growth_pick @ (ind * pick_z)
 
 
-def _loglik(s: Settings, latent: np.ndarray, y: float, draw: np.ndarray) -> np.ndarray:
-    """Log density of one week's points for each particle (constant terms dropped)."""
+def _loglik(s: Settings, latent: np.ndarray, y: float, draw: np.ndarray, career_games: float = np.inf) -> np.ndarray:
+    """Log density of one week's points for each particle (constant terms
+    dropped); `career_games` before this game sets early_noise's widening."""
     loc = link(latent, s.likelihood, lib=np)
     p = nonzero_prob(loc, s.h0[draw], s.h1[draw], np)
     if y <= 0:
         return np.log1p(-p)
     z = np.sqrt(y)
     sig, nu = s.sigma[draw], s.nu[draw]
+    if s.lam_noise is not None:
+        sig = sig * np.exp(s.lam_noise[draw] * np.exp(-career_games / EARLY_NOISE_GAMES))
     dens = student_t.pdf(z, nu, loc, sig) + student_t.pdf(-z, nu, loc, sig)
     return np.log(p) + np.log(np.maximum(dens, 1e-300))
 
@@ -316,6 +326,8 @@ class Filter:
             mean = (s.alpha0 + s.alpha_pick * pl_.pick_z + s.alpha_undrafted * pl_.undrafted
                     + s.alpha_round1 * r1 + s.gamma @ pl_.prospect)
             sd = s.sigma_rookie
+            if s.sd_pick is not None:
+                sd = sd * np.exp(s.sd_pick * pl_.pick_z + s.sd_undrafted * pl_.undrafted)
         start = mean[self.draw] + sd[self.draw] * rng.standard_normal(len(self.draw))
         # x: latent talent before the season's age and growth effects; the
         # first season's latent is `start` (the model's convention).
@@ -351,7 +363,7 @@ class Filter:
 
     def update(self, j: int, y: float, k: int = 0) -> None:
         self.logw = self.logw + _loglik(self.s, self.x + self.bump + self.fluke + self.dev + self.season_shift(j)
-                                        + self.usage_shift(j, k), y, self.draw)
+                                        + self.usage_shift(j, k), y, self.draw, self._career_games(j, k))
         w = self.logw.reshape(self.s.n, self.m)
         w = np.exp(w - w.max(axis=1, keepdims=True))
         w = w / w.sum(axis=1, keepdims=True)
@@ -368,6 +380,10 @@ class Filter:
             self.logw = np.zeros(len(self.x))
         else:
             self.logw = np.log(w.ravel())
+
+    def _career_games(self, j: int, k: int) -> float:
+        cg = self.p.career_games[j]
+        return float(cg[k]) if k < len(cg) else np.inf
 
     def sample(self, r: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray]:
         """`r` particles drawn by weight within draw groups, cycling over draws."""

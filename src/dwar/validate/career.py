@@ -168,6 +168,22 @@ VARIANTS: dict[str, dict] = {
     # later seasons too uncertain).
     "young": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
               "fade_qb": True, "young_steps": (POSITION,)},
+    # Few-game players (ben, 2026-11-12): a handful of games moved players
+    # past draft capital about 3-5x more than history supports. Three fixes,
+    # each vs "young" (WR) / "rb_usage" (RB): early games get extra weekly
+    # noise; the rookie prior's spread depends on draft capital; no young steps.
+    "wr_noise": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                 "fade_qb": True, "young_steps": (POSITION,), "early_noise": (POSITION,)},
+    "wr_pick_sd": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                   "fade_qb": True, "young_steps": (POSITION,), "pick_sd": (POSITION,)},
+    "wr_no_young": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (POSITION,), "sampler": {"draws": 3500},
+                    "fade_qb": True, "young_steps": ()},
+    "rb_noise": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                 "usage": (POSITION,), "early_noise": (POSITION,), "sampler": {"draws": 3500}},
+    "rb_pick_sd": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                   "usage": (POSITION,), "pick_sd": (POSITION,), "sampler": {"draws": 3500}},
+    "rb_no_young": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (), "form_rho": None,
+                    "usage": (POSITION,), "sampler": {"draws": 3500}},
     # Age-curve shapes, 2026-11-06, vs "young" on dev: plateau (rise to 24,
     # flat to 28, then ~-0.16 sqrt/yr) worse (discounted log -0.011, MAE
     # -0.040; veterans 2-3 seasons out worst). Talent-shifted peak: age_shift
