@@ -33,10 +33,12 @@ from dwar.value.availability import (
     AvailabilityDraws,
     draft_terms,
     fit_availability,
+    full_game_counts,
     inactive_seasons,
     inactive_terms,
     injury_terms,
     season_games,
+    starter_seasons,
     status_effects,
     status_multiplier,
 )
@@ -104,6 +106,8 @@ class InjuryInputs:
     effects: dict[tuple[str, int], float]    # status_effects: factor on remaining games
     inactive: pl.DataFrame | None = None     # inactive_seasons: healthy non-playing share, complete seasons
     played: pl.DataFrame | None = None       # player_id, games_played in the current season so far
+    starter: pl.DataFrame | None = None      # starter_seasons: full-game share, complete seasons
+    full_played: pl.DataFrame | None = None  # player_id, full games in the current season so far
 
     def actual(self, player_ids: list[str], season: int) -> tuple[np.ndarray, np.ndarray]:
         """Weeks missed in `season` so far by group (players, groups) and in total."""
@@ -124,6 +128,22 @@ class InjuryInputs:
             on="player_id", how="left",
         )
         return rows["inactive"].fill_null(0.0).to_numpy().astype(float)
+
+    def starter_share(self, player_ids: list[str], season: int) -> np.ndarray:
+        """Full-game share of a complete `season` (0 if absent)."""
+        if self.starter is None:
+            return np.zeros(len(player_ids))
+        rows = pl.DataFrame({"player_id": player_ids}).join(
+            self.starter.filter(pl.col("season") == season).select("player_id", "starter"),
+            on="player_id", how="left",
+        )
+        return rows["starter"].fill_null(0.0).to_numpy().astype(float)
+
+    def full_so_far(self, player_ids: list[str]) -> np.ndarray:
+        if self.full_played is None:
+            return np.zeros(len(player_ids))
+        rows = pl.DataFrame({"player_id": player_ids}).join(self.full_played, on="player_id", how="left")
+        return rows["full"].fill_null(0).to_numpy().astype(float)
 
     def played_so_far(self, player_ids: list[str]) -> np.ndarray:
         if self.played is None:
@@ -213,6 +233,16 @@ def play_rate(player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: Leagu
     return out
 
 
+def _full_so_far(player_weeks: pl.DataFrame, season: int, min_plays: dict[str, int]) -> pl.DataFrame:
+    """player_id, full: games this season with at least the position's `min_plays` plays."""
+    w = player_weeks.filter(pl.col("season") == season)
+    frames = [w.filter(pl.col("position") == p).group_by("player_id").agg(full=(pl.col("plays") >= n).sum())
+              for p, n in min_plays.items() if n]
+    if not frames:
+        return pl.DataFrame(schema={"player_id": pl.String, "full": pl.UInt32})
+    return pl.concat(frames).group_by("player_id").agg(pl.col("full").max())
+
+
 def value_inputs(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
     fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], rng: np.random.Generator,
@@ -248,12 +278,17 @@ def value_inputs(
             inactive_seasons(tables.player_seasons, inj_seasons, schedules, tables.as_of),
             tables.player_seasons.filter(pl.col("season") == clock.current)
             .group_by("player_id").agg(pl.col("games_played").sum()),
+            starter_seasons(tables.player_weeks, schedules, tables.as_of, dict(min_plays or {})),
+            _full_so_far(tables.player_weeks, clock.current, dict(min_plays or {})),
         )
     availability = fit_availability(
         talent, tables.player_seasons, schedules, tables.as_of, injury.seasons if injury else None,
         cfg.games_hinge_quantile, lagged=cfg.games_lagged_talent, survival_first=cfg.survival_first_season,
         static=tables.player_static, draft_survival=cfg.draft_survival, draft_games=cfg.draft_games,
         inactive_survival=cfg.inactive_survival, inactive_games=cfg.inactive_games,
+        starter=injury.starter if injury else None,
+        starter_survival=cfg.starter_survival, starter_games=cfg.starter_games,
+        full=full_game_counts(tables.player_weeks, dict(min_plays or {})), full_games=cfg.full_games,
     ).draw(len(idx), rng)
     situation = situation or {}
 
@@ -301,14 +336,30 @@ def _situation(
 
 def _next_roles(position: str, inputs: ValueInputs, latest: pl.DataFrame) -> list[float | None] | None:
     """Each player's preseason role for the season after his latest one,
-    held for every season valued."""
+    held for every season valued. That role comes from the latest depth
+    chart, which lists a hurt starter's backup as QB1: a player who held
+    the role this preseason and is out injured now keeps it (Hurts and
+    Lamar, 2026-11-13)."""
     cov = inputs.situation.get(position)
     short = inputs.short.get(position)
     if cov is None or short is None or not short.role_base or position not in ROLE_FACTOR:
         return None
-    roles = cov.roles(ROLE_FACTOR[position])
+    roles = cov.roles(ROLE_FACTOR[position]).with_columns(pl.col("season").cast(pl.Int32))
     nxt = latest.select("player_id", season=(pl.col("season") + 1).cast(pl.Int32))
-    return nxt.join(roles.with_columns(pl.col("season").cast(pl.Int32)), on=["player_id", "season"], how="left")["role"].to_list()
+    out = nxt.join(roles, on=["player_id", "season"], how="left")
+    if inputs.injury is None:
+        return out["role"].to_list()
+    now = roles.filter(pl.col("season") == inputs.clock.current).select("player_id", role_now="role")
+    hurt = inputs.injury.status.filter(pl.col("injured")).select("player_id", hurt=pl.lit(True))
+    out = out.join(now, on="player_id", how="left").join(hurt, on="player_id", how="left")
+    return out.select(
+        pl.when(pl.col("hurt").fill_null(False) & (pl.col("role_now") > pl.col("role").fill_null(0.0)))
+        .then(pl.col("role_now")).otherwise(pl.col("role"))
+    ).to_series().to_list()
+
+
+SO_FAR_GAMES = 4.0  # team games after which this season's full-game share replaces last season's
+SO_FAR_PLAYED = 2.0  # games played at which this season's full-game ratio gets half the weight
 
 
 class _InjuryPath:
@@ -316,7 +367,9 @@ class _InjuryPath:
     seasons, projected ones (from games missed) for later seasons, turned into
     each season's `injury_terms`. Also the healthy non-playing share of each
     season (`inactive_terms`): actual for last season, actual so far plus
-    projected for this one, projected (games missed not to injury) after."""
+    projected for this one, projected (games missed not to injury) after.
+    And the full-game share (`starter_share`), the same way: full games
+    are games played less the expected short ones."""
 
     def __init__(
         self, inputs: ValueInputs, position: str, player_ids: list[str], remaining: np.ndarray,
@@ -333,6 +386,10 @@ class _InjuryPath:
         self.total: dict[int, np.ndarray] = {}    # season -> (draws, players) weeks, actual + projected
         self.inactive: dict[int, np.ndarray] = {}  # season -> (draws, players) healthy non-playing share
         self.inactive_so_far = np.zeros(len(player_ids))
+        self.starter: dict[int, np.ndarray] = {}   # season -> (draws, players) full-game share
+        self.full_so_far = np.zeros(len(player_ids))
+        self.team_so_far = np.zeros(len(player_ids))
+        self.played_so_far = np.zeros(len(player_ids))
         if not self.on:
             return
         injury = inputs.injury
@@ -343,7 +400,11 @@ class _InjuryPath:
             self.total[season] = np.broadcast_to(t, shape).astype(float)
         self.multiplier = status_multiplier(injury.status, remaining, injury.effects, player_ids)
         self.inactive[self.current - 1] = np.broadcast_to(injury.inactive_share(player_ids, self.current - 1), shape)
+        self.starter[self.current - 1] = np.broadcast_to(injury.starter_share(player_ids, self.current - 1), shape)
+        self.full_so_far = injury.full_so_far(player_ids)
+        self.played_so_far = injury.played_so_far(player_ids)
         team_so_far = np.maximum(self.season_games - remaining, 0.0)
+        self.team_so_far = team_so_far
         self.inactive_so_far = np.clip(
             team_so_far - injury.played_so_far(player_ids) - self.total[self.current][0], 0.0, team_so_far,
         )
@@ -354,6 +415,52 @@ class _InjuryPath:
             return None
         return inactive_terms(self.inactive.get(season, np.zeros(self.shape)))
 
+    def starter_share(self, season: int) -> np.ndarray | None:
+        """Full-game share of `season` (the one before the season predicted)."""
+        if not self.on:
+            return None
+        return self.starter.get(season, np.zeros(self.shape))
+
+    def starter_input(self, season: int) -> np.ndarray | None:
+        """Full-game share fed to the model predicting `season`: last
+        season's (capped at this season's for later seasons), except for the
+        rest of this season, where this season's
+        share so far takes over within `SO_FAR_GAMES` team games (rest of
+        season full games after week 9, 2020-25: backups with none so far and
+        40%+ last season played 1.1; last season's share said 4.8, the share
+        so far 1.2; scratchpad study insea.py)."""
+        last = self.starter_share(season - 1)
+        if last is None:
+            return last
+        if season > self.current + 1 and self.current in self.starter:
+            # Later seasons: the projected share may fall but not rise above
+            # this season's share of the games he was not hurt for. Chained
+            # freely, a backup drifted back to a starter's share within two
+            # years (validate/starter.py horizons, 2 and 3 seasons out:
+            # backups 2.2-2.4 full games, chained 3.4-4.2, capped 2.4-2.5).
+            # The cap counts only healthy games so that a starter on IR this
+            # season (Dart, 2026) is not held to a backup's share for good;
+            # capping at the raw share scored about the same (MAE 3.41 vs
+            # 3.46 games at 2 seasons out).
+            hurt = self.total[self.current]
+            cap = self.starter[self.current] * self.season_games / np.maximum(self.season_games - hurt, 1.0)
+            return np.minimum(last, np.minimum(cap, 1.0))
+        if season != self.current:
+            return last
+        w = np.minimum(self.team_so_far / SO_FAR_GAMES, 1.0)
+        so_far = np.where(self.team_so_far > 0, self.full_so_far / np.maximum(self.team_so_far, 1.0), 0.0)
+        return (1.0 - w) * last + w * so_far
+
+    def current_full_ratio(self, ratio: np.ndarray) -> np.ndarray:
+        """This season's full games per game played for the rest of it: the
+        model's ratio, moved toward this season's so far as games are played
+        (a backup with only cameo appearances so far keeps making them)."""
+        if not self.on:
+            return ratio
+        w = self.played_so_far / (self.played_so_far + SO_FAR_PLAYED)
+        so_far = np.where(self.played_so_far > 0, self.full_so_far / np.maximum(self.played_so_far, 1.0), 0.0)
+        return (1.0 - w) * ratio + w * so_far
+
     def terms(self, season: int) -> np.ndarray | None:
         if not self.on:
             return None
@@ -363,12 +470,15 @@ class _InjuryPath:
         prior = self.total.get(season - 2, np.zeros(self.shape))
         return injury_terms(np.broadcast_to(groups, (*self.shape, groups.shape[1])), prior, extra)
 
-    def record(self, season: int, share: np.ndarray) -> None:
+    def record(self, season: int, share: np.ndarray, full: np.ndarray | float = 1.0) -> None:
         """Add a projected season's injury weeks: games missed to injury
-        (`share` of the season's games played)."""
+        (`share` of the season's games played), and its full-game share
+        (`full` of the games played)."""
         if not self.on:
             return
         if season == self.current:
+            played = self.remaining * share * self.multiplier
+            self.starter[season] = np.minimum((self.full_so_far + played * full) / self.season_games, 1.0)
             healthy_missed = self.remaining * (1.0 - share) * self.share
             status_missed = self.remaining * share * (1.0 - self.multiplier)
             self.total[season] = self.total[season] + healthy_missed + status_missed
@@ -377,6 +487,7 @@ class _InjuryPath:
         else:
             self.total[season] = self.season_games * (1.0 - share) * self.share
             self.inactive[season] = (1.0 - share) * (1.0 - self.share)
+            self.starter[season] = share * full
 
 
 def _draft_info(tables: PlayerTables, latest: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
@@ -453,20 +564,29 @@ def position_dwar(
     for j, season in enumerate(seasons[1:], start=1):
         terms = inj.terms(season)
         ina = inj.inactive_terms(season - 1)
+        st = inj.starter_input(season)
         draft = draft_terms(season - draft_start + 1, draft_pick) if use_draft else None  # (players, 2)
         # Survive from the previous season into this one, unless the player
         # has already played in it (or later).
-        p_survive = av.survival_prob(position, ages[:, :, j - 1], talent[:, :, j - 1], draft, ina)
+        p_survive = av.survival_prob(position, ages[:, :, j - 1], talent[:, :, j - 1], draft, ina, st)
         survives = rng.random(alive.shape) < p_survive
         alive = np.where(season <= last_season, alive, alive * survives)
-        share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng, terms, draft, ina)
+        share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng, terms, draft, ina, st)
         if season == clock.current:
             games = share * inj.multiplier * remaining
         else:
             games = share * av.season_games
-        inj.record(season, share)
         full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
-        wins = games * ((1.0 - short_rate) * full_wins + short_rate * short_wins)
+        ratio = av.full_ratio(position, ages[:, :, j], talent[:, :, j], terms, draft, ina, st)
+        if ratio is not None and season == clock.current:
+            ratio = inj.current_full_ratio(ratio)
+        if ratio is None:
+            inj.record(season, share, 1.0 - short_rate)
+            wins = games * ((1.0 - short_rate) * full_wins + short_rate * short_wins)
+        else:
+            # Full games from their own model; the rest are short appearances.
+            inj.record(season, share, ratio)
+            wins = games * (ratio * full_wins + (1.0 - ratio) * short_wins)
         if grid is not None:
             # Deep rosters: only the weeks he'd be in a lineup count.
             wins = wins * share_at(grid, talent[:, :, j])

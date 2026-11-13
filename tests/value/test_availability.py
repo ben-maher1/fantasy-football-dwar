@@ -204,3 +204,51 @@ def test_survival_prob_falls_with_inactive_share():
 
     p = draws.survival_prob("WR", age, tal, inactive=inactive_terms(np.array([0.8, 0.0])))
     assert (p[:, 0] < p[:, 1]).all()
+
+
+def test_starter_share_counts_full_games_over_team_games():
+    from dwar.value.availability import starter_seasons
+
+    sched = pl.DataFrame({
+        "season": [2020] * 4, "gameday": [date(2020, 9, 13), date(2020, 9, 20), date(2020, 9, 27), date(2020, 10, 4)],
+        "home_team": ["A"] * 4, "away_team": ["B"] * 4,
+    })
+    pw = pl.DataFrame({
+        "player_id": ["S", "S", "S", "K", "K", "W"], "season": [2020] * 6, "position": ["QB"] * 5 + ["WR"],
+        "plays": [30, 40, 3, 2, 1, 50],
+    })
+    out = starter_seasons(pw, sched, date(2021, 1, 1), {"QB": 15}).sort("player_id")
+    # S: 2 full of 4 team games; K played only short games; WR has no threshold.
+    assert out["player_id"].to_list() == ["K", "S"]
+    assert out["starter"].to_list() == [0.0, 0.5]
+    assert starter_seasons(pw, sched, date(2020, 9, 30), {"QB": 15}).is_empty()  # season not over
+
+
+def test_games_mean_falls_for_backup_with_starter_terms():
+    from dwar.value.availability import starter_terms
+
+    assert np.allclose(starter_terms(np.array([0.5]), np.array([20.0])), [[0.5, 0.5]])
+    coefs = np.tile([-1.0, 0.0, 0.0, 0.05, 2.0, 0.5], (10, 1))
+    draws = AvailabilityDraws({"QB": coefs}, {"QB": 1.0}, {}, 17, starter_games=("QB",))
+    age, tal = np.full((10, 2), 27.0), np.full((10, 2), 16.0)
+    with pytest.raises(ValueError):
+        draws.games_mean("QB", age, tal)
+    p = draws.games_mean("QB", age, tal, starter=np.array([0.0, 0.9]))
+    assert (p[:, 0] < p[:, 1]).all()
+
+
+def test_fit_availability_needs_starter_table():
+    with pytest.raises(ValueError):
+        from dwar.value.availability import fit_availability
+
+        fit_availability(pl.DataFrame(), pl.DataFrame(), pl.DataFrame(), date(2020, 1, 1), starter_games=("QB",))
+
+
+def test_full_ratio_scales_games_to_full_games():
+    games = np.tile([0.0, 0.0, 0.0, 0.0], (5, 1))      # 50% of games played
+    full = np.tile([-1.0, 0.0, 0.0, 0.0], (5, 1))      # sigmoid(-1) of games full
+    draws = AvailabilityDraws({"QB": games}, {"QB": 1.0}, {}, 17, full={"QB": full})
+    age, tal = np.full((5, 2), 27.0), np.full((5, 2), 16.0)
+    r = draws.full_ratio("QB", age, tal)
+    assert np.allclose(r, (1 / (1 + np.e)) / 0.5)
+    assert draws.full_ratio("WR", age, tal) is None
