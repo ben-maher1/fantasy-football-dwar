@@ -208,6 +208,7 @@ class ValueConfig(_Frozen):
     inactive_games: tuple[str, ...] = ()     # ... and games model
     starter_survival: tuple[str, ...] = ()   # positions whose survival model has last season's full-game share
     starter_games: tuple[str, ...] = ()      # ... and games model
+    full_games: tuple[str, ...] = ()         # positions valued on full games (own model), not games played x short chance
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
 

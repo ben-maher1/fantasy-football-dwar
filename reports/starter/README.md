@@ -24,9 +24,39 @@ share x (talent - 15) / 5).
 | Backups 12+ PPG: full games pred (actual) | 3.55 -> 2.45 (2.21) | 3.77 -> 2.47 (3.40) |
 
 Kept in the games model (`starter_games: [QB]`); survival is worse on
-2023-25, so left off (`starter_survival: []`). In the projection, last
-season's share is actual; this season's is full games so far plus projected
-games played times one minus the short-game chance; later seasons' the same.
+2023-25, so left off (`starter_survival: []`).
+
+First board build: Fields only fell 17%. Three more changes, each checked:
+
+- Full games valued directly (`full_games: [QB]`): a second games model,
+  same terms, fit to full games among QBs who played; projected games played
+  are scaled by the ratio of the two models' means. Before, a backup's
+  cameos counted as full games unless his preseason-role short rate said
+  otherwise (Fields' was 29%).
+- Rest of this season: this season's full-game share so far replaces last
+  season's within 4 team games, and the full-game ratio moves toward this
+  season's (half weight at 2 games played). `rest_of_season` in summary.json:
+  after week 9, backups with no full game so far and 40%+ last season played
+  1.1 full games the rest of the way; last season's share said 4.8, so far 1.2.
+- Later seasons: chained freely, the share drifted back to a starter's. Now
+  it is capped at this season's share of the games he was not hurt for.
+  `horizons` in summary.json, full games 2 and 3 seasons out:
+
+| | actual | chained | capped (healthy games) |
+|---|---|---|---|
+| Backups 14+ PPG (n 41), 2 out | 2.20 | 3.35 | 2.48 |
+| Backups, 3 out | 2.37 | 4.19 | 2.45 |
+| Starters 50%+ (n 353), 2 out | 9.59 | 10.35 | 10.32 |
+| Starters, 3 out | 8.41 | 8.87 | 8.82 |
+
+  Capping at the raw share scored about the same (all QBs MAE 3.41 vs 3.46
+  at 2 out) but would hold a starter on IR now (Dart) to a backup's share.
+
+Board (as of 2026-11-09, same fits): Superflex Fields 0.69 -> 0.35 (QB19 ->
+QB28), Hurts 0.68 -> 1.31 (QB20 -> QB14), Lamar 0.99 -> 1.45 (QB17 -> QB11),
+Dart 2.16 -> 1.62 (QB6 -> QB7; on IR since week 3). Other positions move by
+Monte Carlo noise only (at most 0.17). Odd one: Taysom Hill 0.11 -> 0.29
+(QB34), who had a near-certain short-game rate before.
 
 Also fixed: next season's QB role came from the latest depth chart, which
 lists a hurt starter's backup as QB1 (Nov 9: Joe Milton for PHI, Jacoby

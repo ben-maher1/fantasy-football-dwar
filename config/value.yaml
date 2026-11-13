@@ -18,6 +18,7 @@ inactive_survival: [QB, RB, WR, TE]  # last season's healthy non-playing share (
 inactive_games: [QB, RB, WR, TE]     # ... and in games played (same)
 starter_survival: []     # tested OFF (validate/starter.py, 2026-11-13): survival better 2013-22 but worse 2023-25
 starter_games: [QB]      # last season's share of full games (15+ plays) and share x talent in games played (validate/starter.py: better 2013-22 and 2023-25; ben, 2026-11-13: backups should play few games)
+full_games: [QB]         # QB value counts full games (15+ plays) from their own games model, so a backup's cameo appearances are not valued as starts (validate/starter.py full-games scores; 2026-11-13)
 late_pick: {}             # OFF (ben, 2026-11-10): round-3+ scaling cut productive late-round stars too hard; smoother fades no clearer win (reports/late_pick). Was RB: {min_round: 3, max_career_year: 3, min_ppg: 8, min_games: 8, factors: [1.0, 0.85, 0.80]}
 survival_first_season: 1999  # survival trained on points per game since 1999, not fitted talent (2013+ for RB/WR): too few old players otherwise (validate/survival.py, 2026-11-10)
 injury_history: true     # weeks missed to injury in the last two seasons + current injury status (injury step)

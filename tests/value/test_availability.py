@@ -242,3 +242,13 @@ def test_fit_availability_needs_starter_table():
         from dwar.value.availability import fit_availability
 
         fit_availability(pl.DataFrame(), pl.DataFrame(), pl.DataFrame(), date(2020, 1, 1), starter_games=("QB",))
+
+
+def test_full_ratio_scales_games_to_full_games():
+    games = np.tile([0.0, 0.0, 0.0, 0.0], (5, 1))      # 50% of games played
+    full = np.tile([-1.0, 0.0, 0.0, 0.0], (5, 1))      # sigmoid(-1) of games full
+    draws = AvailabilityDraws({"QB": games}, {"QB": 1.0}, {}, 17, full={"QB": full})
+    age, tal = np.full((5, 2), 27.0), np.full((5, 2), 16.0)
+    r = draws.full_ratio("QB", age, tal)
+    assert np.allclose(r, (1 / (1 + np.e)) / 0.5)
+    assert draws.full_ratio("WR", age, tal) is None
