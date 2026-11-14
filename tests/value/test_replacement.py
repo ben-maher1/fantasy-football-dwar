@@ -95,3 +95,20 @@ def test_weekly_qb_waiver_level_falls_back_to_superflex_flex():
     fmt1 = SimpleNamespace(roster=roster, teams=1, lineup={"QB": 1, "WR": 1})
     w1, _ = waiver_from_fits(fits, draws, fmt1, (2025,), 1, full, {2025: 17})
     assert np.allclose(w1["QB"], 0.0)
+
+
+def test_marginal_points_small_when_bench_is_close():
+    from dwar.value.replacement import marginal_at, marginal_points
+
+    rng = np.random.default_rng(0)
+    # One WR slot, two WRs each: the starter's backup is nearly as good on
+    # team A's side of the pool, far worse at the bottom.
+    talent = {"WR": np.array([20.0, 19.5, 10.0, 9.5])}
+    g = marginal_points(talent, {"WR": 1}, teams=2, rostered={"WR": 2}, p_play={"WR": 1.0},
+                        waiver={"WR": 3.0}, rng=rng, weeks=20)
+    t, m = g["WR"]
+    loss = dict(zip(t.tolist(), m.tolist()))
+    # Snake: team 0 gets 20 and 9.5, team 1 gets 19.5 and 10.
+    assert np.isclose(loss[20.0], 10.5) and np.isclose(loss[19.5], 9.5)
+    assert loss[10.0] == 0.0 and loss[9.5] == 0.0   # benched every week
+    assert marginal_at(g["WR"], np.array([25.0]))[0] >= marginal_at(g["WR"], np.array([20.0]))[0] + 5 - 1e-9

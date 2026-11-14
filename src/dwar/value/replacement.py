@@ -149,6 +149,76 @@ def start_share(
     return out
 
 
+def marginal_points(
+    talent: dict[str, np.ndarray], lineup: dict[str, int], teams: int, rostered: dict[str, int],
+    p_play: dict[str, float], waiver: dict[str, float], rng: np.random.Generator, weeks: int = 1000,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """With-and-without value (ben, 2026-11-14): for each rostered player,
+    the lineup points his team loses in a week he plays if he is gone, his
+    roster spot refilled by a waiver player at his position (talent
+    `waiver[p]`, always available) and the lineup reset. A starter with a
+    near-equal backup on the bench loses little; a player nobody behind him
+    can match loses a lot. Rosters are dealt and weeks drawn as in
+    `start_share`. Returns, per position, (talent ascending, mean loss per
+    week played)."""
+    roster: list[dict[str, np.ndarray]] = [{} for _ in range(teams)]
+    pools = {}
+    for p, n in rostered.items():
+        if p not in talent or n == 0:
+            continue
+        t = np.sort(np.asarray(talent[p]))[::-1][: teams * n]
+        pools[p] = t
+        team_of = np.array([(r % teams) if (r // teams) % 2 == 0 else teams - 1 - (r % teams) for r in range(len(t))])
+        for k in range(teams):
+            roster[k][p] = np.flatnonzero(team_of == k)
+    loss = {p: np.zeros(len(t)) for p, t in pools.items()}
+    plays = {p: np.zeros(len(t)) for p, t in pools.items()}
+
+    def points(tal: dict[str, np.ndarray], avail: dict[str, np.ndarray]) -> float:
+        st = _best_lineup(avail, tal, lineup)
+        return float(sum(tal[p][st[p]].sum() for p in tal))
+
+    for _ in range(weeks):
+        for k in range(teams):
+            ranks = roster[k]
+            tal = {p: pools[p][r] for p, r in ranks.items()}
+            avail = {p: rng.random(len(r)) < p_play.get(p, 1.0) for p, r in ranks.items()}
+            st = _best_lineup(avail, tal, lineup)
+            base = float(sum(tal[p][st[p]].sum() for p in tal))
+            for p, r in ranks.items():
+                plays[p][r] += avail[p]
+                for i in np.flatnonzero(st[p]):
+                    # Without him: the waiver player takes his spot (kept sorted, best first).
+                    t2 = dict(tal)
+                    a2 = dict(avail)
+                    rest_t = np.delete(tal[p], i)
+                    rest_a = np.delete(avail[p], i)
+                    pos = int(np.searchsorted(-rest_t, -waiver.get(p, 0.0), side="right"))
+                    t2[p] = np.insert(rest_t, pos, waiver.get(p, 0.0))
+                    a2[p] = np.insert(rest_a, pos, True)
+                    loss[p][r[i]] += base - points(t2, a2)
+    out = {}
+    for p, t in pools.items():
+        m = loss[p] / np.maximum(plays[p], 1)
+        order = np.argsort(t)
+        out[p] = (t[order], m[order])
+    return out
+
+
+def marginal_at(grid: tuple[np.ndarray, np.ndarray], talent: np.ndarray) -> np.ndarray:
+    """A player's with-and-without loss per game from his talent (see
+    `marginal_points`): smoothed over neighbouring ranks, never falling with
+    talent, rising point for point above the best rostered player's talent
+    and the lowest rostered player's loss below the pool."""
+    t, m = grid
+    k = max(1, len(m) // 24)
+    smooth = np.convolve(np.pad(m, k, mode="edge"), np.ones(2 * k + 1) / (2 * k + 1), mode="valid")
+    smooth = np.maximum.accumulate(smooth)
+    talent = np.asarray(talent, float)
+    inside = np.interp(talent, t, smooth, left=smooth[0], right=smooth[-1])
+    return inside + np.maximum(talent - t[-1], 0.0)
+
+
 def share_at(grid: tuple[np.ndarray, np.ndarray], talent: np.ndarray) -> np.ndarray:
     """A player's lineup share from his talent (see `start_share`): smoothed
     by a running mean over neighbouring ranks, 1 above the best rostered

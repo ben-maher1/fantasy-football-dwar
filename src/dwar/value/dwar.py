@@ -46,6 +46,8 @@ from dwar.value.old_star import keep_rates, latest_full_season, pull_back
 from dwar.value.projection import PositionDraws, future_situation, project_talent
 from dwar.value.replacement import (
     FLEX_ELIGIBLE,
+    marginal_at,
+    marginal_points,
     replacement_level,
     share_at,
     start_share,
@@ -168,6 +170,9 @@ class ValueInputs:
     start: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
     p_play: dict[str, float] | None = None
     out_for_season: frozenset[str] = frozenset()  # known to miss the rest of this season (config/out_for_season.yaml)
+    # With `cfg.with_without`: per position, loss per game played by talent
+    # (replacement.marginal_points), used instead of (talent - waiver) x lineup share.
+    marginal: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
 
 
 def replacement_from_fits(
@@ -337,8 +342,14 @@ def value_inputs(
         p_play = play_rate(tables.player_seasons, recent, fmt, cfg.pool_min_games)
         start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play,
                             np.random.default_rng(rng.integers(2**32)))
+    marginal = None
+    if fmt.roster is not None and cfg.with_without:
+        waiver = {p: float(np.mean(v)) for p, v in replacement.items()}
+        marginal = marginal_points(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play, waiver,
+                                   np.random.default_rng(rng.integers(2**32)))
     out = load_out_for_season(clock.current, news_as_of or tables.as_of)
-    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play, out)
+    return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play, out,
+                       marginal)
 
 
 def _situation(
@@ -583,6 +594,9 @@ def position_dwar(
     short_rate = short.rates(latest["player_id"].to_list(), _next_roles(position, inputs, latest))[None, :] if short else 0.0
     short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0
     grid = inputs.start.get(position) if inputs.start else None
+    mgrid = inputs.marginal.get(position) if inputs.marginal else None
+    if mgrid is not None:
+        grid, short_wins = None, 0.0   # the loss already counts lineup weeks; cameos lose ~nothing
     alive = np.ones(talent.shape[:2])
     total = np.zeros(talent.shape[:2])
     inj = _InjuryPath(inputs, position, latest["player_id"].to_list(), remaining, talent.shape[:2])
@@ -605,7 +619,10 @@ def position_dwar(
             games = share * inj.multiplier * remaining
         else:
             games = share * av.season_games
-        full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
+        if mgrid is not None:
+            full_wins = wins_per_game(marginal_at(mgrid, talent[:, :, j]), inputs.sigma)
+        else:
+            full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
         ratio = av.full_ratio(position, ages[:, :, j], talent[:, :, j], terms, draft, ina, st)
         if ratio is not None and season == clock.current:
             ratio = inj.current_full_ratio(ratio)
