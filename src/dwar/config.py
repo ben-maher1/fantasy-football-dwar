@@ -63,6 +63,10 @@ class RosterSettings(_Frozen):
 
     bench: int = Field(ge=0)
     by_position: dict[str, int]
+    # Positions whose waiver level is points per team game (talent times
+    # the share of team games played as full games), not per game played:
+    # a waiver backup QB who never starts sets no bar (ben, 2026-11-14).
+    weekly: tuple[str, ...] = ()
 
 
 class LeagueFormat(_Frozen):

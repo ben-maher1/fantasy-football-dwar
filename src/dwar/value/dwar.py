@@ -45,6 +45,7 @@ from dwar.value.availability import (
 from dwar.value.old_star import keep_rates, latest_full_season, pull_back
 from dwar.value.projection import PositionDraws, future_situation, project_talent
 from dwar.value.replacement import (
+    FLEX_ELIGIBLE,
     replacement_level,
     share_at,
     start_share,
@@ -193,11 +194,22 @@ def replacement_from_fits(
 def waiver_from_fits(
     fits: dict[str, FitResult], draws: dict[str, PositionDraws], fmt: LeagueFormat,
     seasons: tuple[int, ...], min_games: int,
+    full: pl.DataFrame | None = None, games_by_season: dict[int, int] | None = None,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     """Waiver level per position and draw, averaged over `seasons`, and the
     latest season's league-wide talent (posterior means) per position for
-    the lineup simulation."""
+    the lineup simulation.
+
+    Positions in `fmt.roster.weekly` are ranked and measured by points per
+    team game: talent times full games (`full`, full_game_counts) over the
+    season's team games (`games_by_season`). With a superflex slot, such a
+    position's level is at least the best waiver level among the other
+    positions the slot takes: with no starter left on waivers, a manager
+    fills the slot with a flex player."""
     assert fmt.roster is not None
+    weekly = set(fmt.roster.weekly)
+    if weekly and (full is None or games_by_season is None):
+        raise ValueError("weekly waiver levels need full-game counts and season games")
     levels: dict[str, list[np.ndarray]] = {p: [] for p in fits}
     pools: dict[str, np.ndarray] = {}
     for season in seasons:
@@ -205,15 +217,28 @@ def waiver_from_fits(
         for p, r in fits.items():
             keys = r.data.ps_keys
             idx = np.flatnonzero((keys["season"] == season).to_numpy() & (keys["games_played"] >= min_games).to_numpy())
-            cols.append(draws[p].talent[:, idx])
+            t = draws[p].talent[:, idx]
+            pools[p] = t.mean(axis=0)
+            if p in weekly:
+                assert full is not None and games_by_season is not None
+                k = keys[idx].select("player_id", pl.col("season").cast(pl.Int64)).join(
+                    full, on=["player_id", "season"], how="left", maintain_order="left")
+                t = t * (k["full"].fill_null(0).to_numpy() / games_by_season[season])[None, :]
+            cols.append(t)
             labels += [p] * len(idx)
-            pools[p] = draws[p].talent[:, idx].mean(axis=0)
         if not labels:
             continue
         w = waiver_level(np.concatenate(cols, axis=1), np.array(labels), dict(fmt.roster.by_position), fmt.teams)
         for p, v in w.items():
             levels[p].append(v)
-    return {p: np.mean(v, axis=0) for p, v in levels.items() if v}, pools
+    out = {p: np.mean(v, axis=0) for p, v in levels.items() if v}
+    if fmt.lineup.get("SUPERFLEX", 0):
+        flex = [q for q in FLEX_ELIGIBLE["SUPERFLEX"] if q in out]
+        for p in weekly & set(out):
+            others = [out[q] for q in flex if q != p and q not in weekly]
+            if others:
+                out[p] = np.maximum(out[p], np.max(others, axis=0))
+    return out, pools
 
 
 def play_rate(player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: LeagueFormat, min_games: int) -> dict[str, float]:
@@ -304,7 +329,11 @@ def value_inputs(
     }
     start = p_play = None
     if fmt.roster is not None:
-        replacement, pools = waiver_from_fits(fits, draws, fmt, recent, cfg.pool_min_games)
+        replacement, pools = waiver_from_fits(
+            fits, draws, fmt, recent, cfg.pool_min_games,
+            full_game_counts(tables.player_weeks, dict(min_plays or {})) if fmt.roster.weekly else None,
+            {int(s): int(g) for s, g in season_games(schedules).select("season", "games").iter_rows()},
+        )
         p_play = play_rate(tables.player_seasons, recent, fmt, cfg.pool_min_games)
         start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play,
                             np.random.default_rng(rng.integers(2**32)))
