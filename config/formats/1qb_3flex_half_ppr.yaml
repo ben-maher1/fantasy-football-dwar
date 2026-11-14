@@ -19,3 +19,4 @@ roster:
     RB: 8
     WR: 10
     TE: 4
+  weekly: [QB]   # QBs measured per team game, as in the other tabs (2026-11-14)
