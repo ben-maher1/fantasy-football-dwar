@@ -107,6 +107,13 @@ VARIANTS: dict[str, dict] = {
     # rb_fill = rb_usage + a shift in those games.
     "rb_fill": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                 "usage": (POSITION,), "fill_in": (POSITION,), "sampler": {"draws": 3500}},
+    # TE step 1 (plan "game-by-game TE model with usage and efficiency",
+    # ben 2026-11-14): the current TE model (season level, with growth and
+    # first-round step as config/model.yaml has for TE) vs the game-by-game
+    # model with young steps. Run with DWAR_POSITION=TE.
+    "te_base": {"game_steps": (), "qb_drift": (), "young_steps": (), "sampler": {"draws": 3500}},
+    "te_career": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                  "sampler": {"draws": 3500}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
