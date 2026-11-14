@@ -63,6 +63,10 @@ class RosterSettings(_Frozen):
 
     bench: int = Field(ge=0)
     by_position: dict[str, int]
+    # Positions whose waiver level is points per team game (talent times
+    # the share of team games played as full games), not per game played:
+    # a waiver backup QB who never starts sets no bar (ben, 2026-11-14).
+    weekly: tuple[str, ...] = ()
 
 
 class LeagueFormat(_Frozen):
@@ -206,6 +210,10 @@ class ValueConfig(_Frozen):
     draft_games: tuple[str, ...] = ()        # ... and games model
     inactive_survival: tuple[str, ...] = ()  # positions whose survival model has last season's healthy non-playing share
     inactive_games: tuple[str, ...] = ()     # ... and games model
+    starter_survival: tuple[str, ...] = ()   # positions whose survival model has last season's full-game share
+    starter_games: tuple[str, ...] = ()      # ... and games model
+    with_without: bool = False               # roster formats: value = lineup points a typical team loses without him (test, 2026-11-14)
+    full_games: tuple[str, ...] = ()         # positions valued on full games (own model), not games played x short chance
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
 

@@ -195,3 +195,24 @@ def test_out_for_season_is_point_in_time():
     assert "00-0040130" in load_out_for_season(2026, date(2026, 11, 7))
     assert "00-0040130" not in load_out_for_season(2026, date(2026, 11, 6))  # before it was known
     assert "00-0040130" not in load_out_for_season(2027, date(2026, 11, 7))  # only that season
+
+
+def test_hurt_starter_keeps_qb1_role_for_next_season():
+    """The latest depth chart lists a hurt starter's backup as QB1; the
+    starter keeps the role he had this preseason (Hurts, 2026-11-13)."""
+    from types import SimpleNamespace
+
+    from dwar.value.dwar import _next_roles
+
+    roles = pl.DataFrame({
+        "player_id": ["H", "H", "B", "B", "F", "F"], "season": [2026, 2027] * 3, "role": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    })
+    cov = SimpleNamespace(roles=lambda factor: roles)
+    status = pl.DataFrame({"player_id": ["H", "F"], "injured": [True, True], "reserve": [True, False], "streak": [3, 1]})
+    inputs = SimpleNamespace(
+        situation={"QB": cov}, short={"QB": SimpleNamespace(role_base={0.0: 0.4, 1.0: 0.02})},
+        injury=SimpleNamespace(status=status), clock=SimpleNamespace(current=2026),
+    )
+    latest = pl.DataFrame({"player_id": ["H", "B", "F"], "season": [2026, 2026, 2026]})
+    # H hurt starter keeps QB1; B (his backup) keeps the listed QB1; F was a backup before he got hurt.
+    assert _next_roles("QB", inputs, latest) == [1.0, 1.0, 0.0]

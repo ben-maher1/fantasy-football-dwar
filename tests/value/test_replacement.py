@@ -69,3 +69,46 @@ def test_start_share_starters_always_bench_sometimes():
     assert 0.0 < s[0] < 0.2             # third WR: only when both above him are out
     assert share_at(grid["WR"], np.array([25.0]))[0] == 1.0
     assert np.all(np.diff(share_at(grid["WR"], np.linspace(1, 20, 50))) >= 0)
+
+
+def test_weekly_qb_waiver_level_falls_back_to_superflex_flex():
+    """A waiver QB who never starts sets no bar; with a superflex slot the
+    QB level is at least the best waiver flex player (ben, 2026-11-14)."""
+    from types import SimpleNamespace
+
+    import polars as pl
+
+    from dwar.value.dwar import waiver_from_fits
+
+    def fit(pos, ids, seasons):
+        keys = pl.DataFrame({"player_id": ids, "season": seasons, "games_played": [17] * len(ids)})
+        return SimpleNamespace(data=SimpleNamespace(ps_keys=keys))
+
+    fits = {"QB": fit("QB", ["A", "B"], [2025, 2025]), "WR": fit("WR", ["W1", "W2"], [2025, 2025])}
+    draws = {"QB": SimpleNamespace(talent=np.array([[20.0, 15.0]])), "WR": SimpleNamespace(talent=np.array([[10.0, 4.0]]))}
+    full = pl.DataFrame({"player_id": ["A", "B"], "season": [2025, 2025], "full": [17, 0]})
+    roster = SimpleNamespace(by_position={"QB": 1, "WR": 1}, weekly=("QB",))
+    fmt = SimpleNamespace(roster=roster, teams=1, lineup={"QB": 1, "WR": 1, "SUPERFLEX": 1})
+    w, _ = waiver_from_fits(fits, draws, fmt, (2025,), 1, full, {2025: 17})
+    # B scores 15 a game but never starts: 0 a week; the waiver WR (4) is the fallback.
+    assert np.allclose(w["QB"], 4.0) and np.allclose(w["WR"], 4.0)
+    fmt1 = SimpleNamespace(roster=roster, teams=1, lineup={"QB": 1, "WR": 1})
+    w1, _ = waiver_from_fits(fits, draws, fmt1, (2025,), 1, full, {2025: 17})
+    assert np.allclose(w1["QB"], 0.0)
+
+
+def test_marginal_points_small_when_bench_is_close():
+    from dwar.value.replacement import marginal_at, marginal_points
+
+    rng = np.random.default_rng(0)
+    # One WR slot, two WRs each: the starter's backup is nearly as good on
+    # team A's side of the pool, far worse at the bottom.
+    talent = {"WR": np.array([20.0, 19.5, 10.0, 9.5])}
+    g = marginal_points(talent, {"WR": 1}, teams=2, rostered={"WR": 2}, p_play={"WR": 1.0},
+                        waiver={"WR": 3.0}, rng=rng, weeks=20)
+    t, m = g["WR"]
+    loss = dict(zip(t.tolist(), m.tolist()))
+    # Snake: team 0 gets 20 and 9.5, team 1 gets 19.5 and 10.
+    assert np.isclose(loss[20.0], 10.5) and np.isclose(loss[19.5], 9.5)
+    assert loss[10.0] == 0.0 and loss[9.5] == 0.0   # benched every week
+    assert marginal_at(g["WR"], np.array([25.0]))[0] >= marginal_at(g["WR"], np.array([20.0]))[0] + 5 - 1e-9

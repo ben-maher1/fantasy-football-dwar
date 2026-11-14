@@ -9,3 +9,13 @@ lineup:
   TE: 1
   FLEX: 2        # RB/WR/TE
 discount: 0.80   # ben, 2026-11-07 (with a 5-season horizon)
+# Deep rosters (ben, 2026-11-14: with-and-without value on all tabs): 25
+# active spots per team, valued against the waiver wire like the other tabs.
+roster:
+  bench: 16
+  by_position:
+    QB: 3
+    RB: 8
+    WR: 10
+    TE: 4
+  weekly: [QB]

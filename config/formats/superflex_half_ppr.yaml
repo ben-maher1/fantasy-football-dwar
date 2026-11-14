@@ -10,3 +10,15 @@ lineup:
   FLEX: 2        # RB/WR/TE
   SUPERFLEX: 1   # QB/RB/WR/TE
 discount: 0.80   # ben, 2026-11-07 (with a 5-season horizon)
+# Deep rosters (ben, 2026-11-14: chose assumed sizes): 25 active spots per
+# team (ben, 2026-11-14: 3 QBs each, 36 league-wide), value against the waiver wire as in 1qb_3flex_half_ppr. QBs are
+# measured per team game, so waiver backups who never start set no bar,
+# and with no starting QB left the superflex slot falls back to a flex player.
+roster:
+  bench: 15
+  by_position:
+    QB: 3
+    RB: 8
+    WR: 10
+    TE: 4
+  weekly: [QB]
