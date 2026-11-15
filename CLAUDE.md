@@ -86,9 +86,15 @@ From talent to DWAR:
 4. DWAR = discounted sum of expected future wins above replacement. Report the
    posterior distribution, not just the mean.
 
-Rookie draft picks: value = expected DWAR of a player drafted at that slot, using
-historical rookie-draft ADP to map pick → typical NFL draft capital and position mix.
-This is v2. Note it in output as unavailable in v1.
+Rookie draft picks (value/picks.py, ben 2026-11-14/15): each past NFL class (2013 on)
+is put in draft-day order by the model's draft-time view (no rookie ADP: no free
+history). Slot k's value is the pooled distribution of DWAR futures for the k-th
+rookie across classes, simulated from the fit's rookie prior and the board's
+projection, never per-slot realized averages (too noisy). 5 rounds x 12, next 5
+rookie drafts. Checked by draft-day band against real 5-season careers; picks bend
+the prior's log-pick line to the fit's own rookies, tie rookie-year games to talent,
+and scale RB rookie scoring by one factor learned from history (config/value.yaml).
+Output: picks.parquet beside dwar.parquet.
 
 ## Validation (required before anything is published)
 

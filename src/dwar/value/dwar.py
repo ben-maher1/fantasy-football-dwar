@@ -541,6 +541,114 @@ def _draft_info(tables: PlayerTables, latest: pl.DataFrame) -> tuple[np.ndarray,
     return start, s["draft_pick"].cast(pl.Float64).to_numpy()
 
 
+@dataclass(frozen=True)
+class RookieStart:
+    """Players valued before their first NFL season (rookie draft picks,
+    value/picks.py). Their rookie season `season` is projected from the
+    rookie-season models there instead of the games and survival models,
+    which are trained on players who already have a season behind them."""
+
+    season: np.ndarray            # (players,) rookie season
+    share: np.ndarray             # (draws, players) share of the rookie season's games played; 0 = did not play
+    ratio: np.ndarray | None      # (draws, players) full games per game played in it (positions with full games)
+    late: np.ndarray              # (draws, players) P(plays the next season | did not play as a rookie)
+
+
+@dataclass(frozen=True)
+class SeasonTrace:
+    """Per draw, player and valued season (seasons[1:]): what went into the value."""
+
+    talent: np.ndarray   # expected points per game played
+    games: np.ndarray    # games played
+    alive: np.ndarray    # 1 if still in the league
+    wins: np.ndarray     # discounted wins added (already times alive)
+
+
+def season_values(
+    position: str, inputs: ValueInputs, fmt: LeagueFormat, rng: np.random.Generator,
+    talent: np.ndarray, ages: np.ndarray, seasons: np.ndarray, last_season: np.ndarray, player_ids: list[str],
+    remaining: np.ndarray, draft_start: np.ndarray | None, draft_pick: np.ndarray | None,
+    roles: list[float | None] | None = None, rookie: RookieStart | None = None, trace: bool = False,
+) -> tuple[np.ndarray, SeasonTrace | None]:
+    """Discounted wins (draws, players) from projected talent (draws,
+    players, seasons): survival, games, full games and lineup share season
+    by season. `seasons[0]` is the season before the current one; `roles`
+    are preseason roles for the short-game chance (`_next_roles`). With
+    `rookie`, seasons before each player's rookie season count nothing and
+    the rookie season uses its own games and survival draws."""
+    clock = inputs.clock
+    av = inputs.availability
+    repl = inputs.replacement[position][:, None]
+    short = inputs.short.get(position)
+    short_rate = short.rates(player_ids, roles)[None, :] if short else 0.0
+    short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0
+    grid = inputs.start.get(position) if inputs.start else None
+    mgrid = inputs.marginal.get(position) if inputs.marginal else None
+    if mgrid is not None:
+        grid, short_wins = None, 0.0   # the loss already counts lineup weeks; cameos lose ~nothing
+    alive = np.ones(talent.shape[:2])
+    total = np.zeros(talent.shape[:2])
+    inj = _InjuryPath(inputs, position, player_ids, remaining, talent.shape[:2])
+    if inputs.out_for_season:
+        inj.multiplier = np.where(np.isin(player_ids, list(inputs.out_for_season)), 0.0, inj.multiplier)
+    use_draft = draft_start is not None
+    played_rookie = None
+    out = [] if trace else None
+    for j, season in enumerate(seasons[1:], start=1):
+        terms = inj.terms(season)
+        ina = inj.inactive_terms(season - 1)
+        st = inj.starter_input(season)
+        draft = draft_terms(season - draft_start + 1, draft_pick) if use_draft else None  # (players, 2)
+        # Survive from the previous season into this one, unless the player
+        # has already played in it (or later).
+        p_survive = av.survival_prob(position, ages[:, :, j - 1], talent[:, :, j - 1], draft, ina, st)
+        if rookie is not None and played_rookie is not None:
+            # Into the season after the rookie one: a rookie who never played
+            # follows the rookie-season history, not the survival model.
+            after = (season == rookie.season + 1)[None, :]
+            p_survive = np.where(after & ~played_rookie, rookie.late, p_survive)
+        survives = rng.random(alive.shape) < p_survive
+        alive = np.where(season <= last_season, alive, alive * survives)
+        share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng, terms, draft, ina, st)
+        ratio = av.full_ratio(position, ages[:, :, j], talent[:, :, j], terms, draft, ina, st)
+        if rookie is not None:
+            first = (season == rookie.season)[None, :]
+            share = np.where(first, rookie.share, share)
+            if ratio is not None and rookie.ratio is not None:
+                ratio = np.where(first, rookie.ratio, ratio)
+            if first.any():
+                played_rookie = np.where(first, rookie.share > 0, False if played_rookie is None else played_rookie)
+        if season == clock.current:
+            games = share * inj.multiplier * remaining
+        else:
+            games = share * av.season_games
+        if mgrid is not None:
+            full_wins = wins_per_game(marginal_at(mgrid, talent[:, :, j]), inputs.sigma)
+        else:
+            full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
+        if ratio is not None and season == clock.current:
+            ratio = inj.current_full_ratio(ratio)
+        if ratio is None:
+            inj.record(season, share, 1.0 - short_rate)
+            wins = games * ((1.0 - short_rate) * full_wins + short_rate * short_wins)
+        else:
+            # Full games from their own model; the rest are short appearances.
+            inj.record(season, share, ratio)
+            wins = games * (ratio * full_wins + (1.0 - ratio) * short_wins)
+        if grid is not None:
+            # Deep rosters: only the weeks he'd be in a lineup count.
+            wins = wins * share_at(grid, talent[:, :, j])
+        valued = alive if rookie is None else alive * (season >= rookie.season)[None, :]
+        add = fmt.discount ** (season - clock.current) * valued * wins
+        total += add
+        if out is not None:
+            out.append((talent[:, :, j], games, valued, add))
+    tr = None
+    if out is not None:
+        tr = SeasonTrace(*(np.stack([o[k] for o in out], axis=-1) for k in range(4)))
+    return total, tr
+
+
 def position_dwar(
     position: str, r: FitResult, inputs: ValueInputs, tables: PlayerTables,
     fmt: LeagueFormat, cfg: ValueConfig, rng: np.random.Generator,
@@ -588,55 +696,12 @@ def position_dwar(
     ages = last_age[None, :, None] + (seasons[None, None, :] - last_season[None, :, None])
     ages = np.broadcast_to(ages, talent.shape)
 
-    av = inputs.availability
-    repl = inputs.replacement[position][:, None]
-    short = inputs.short.get(position)
-    short_rate = short.rates(latest["player_id"].to_list(), _next_roles(position, inputs, latest))[None, :] if short else 0.0
-    short_wins = wins_per_game(np.maximum(short.mean_points - repl, 0.0), inputs.sigma) if short else 0.0
-    grid = inputs.start.get(position) if inputs.start else None
-    mgrid = inputs.marginal.get(position) if inputs.marginal else None
-    if mgrid is not None:
-        grid, short_wins = None, 0.0   # the loss already counts lineup weeks; cameos lose ~nothing
-    alive = np.ones(talent.shape[:2])
-    total = np.zeros(talent.shape[:2])
-    inj = _InjuryPath(inputs, position, latest["player_id"].to_list(), remaining, talent.shape[:2])
-    if inputs.out_for_season:
-        inj.multiplier = np.where(latest["player_id"].is_in(list(inputs.out_for_season)).to_numpy(), 0.0, inj.multiplier)
-    use_draft = position in av.draft_survival or position in av.draft_games
+    use_draft = position in inputs.availability.draft_survival or position in inputs.availability.draft_games
     draft_start, draft_pick = _draft_info(tables, latest) if use_draft else (None, None)
-    for j, season in enumerate(seasons[1:], start=1):
-        terms = inj.terms(season)
-        ina = inj.inactive_terms(season - 1)
-        st = inj.starter_input(season)
-        draft = draft_terms(season - draft_start + 1, draft_pick) if use_draft else None  # (players, 2)
-        # Survive from the previous season into this one, unless the player
-        # has already played in it (or later).
-        p_survive = av.survival_prob(position, ages[:, :, j - 1], talent[:, :, j - 1], draft, ina, st)
-        survives = rng.random(alive.shape) < p_survive
-        alive = np.where(season <= last_season, alive, alive * survives)
-        share = av.games_share(position, ages[:, :, j], talent[:, :, j], rng, terms, draft, ina, st)
-        if season == clock.current:
-            games = share * inj.multiplier * remaining
-        else:
-            games = share * av.season_games
-        if mgrid is not None:
-            full_wins = wins_per_game(marginal_at(mgrid, talent[:, :, j]), inputs.sigma)
-        else:
-            full_wins = wins_per_game(np.maximum(talent[:, :, j] - repl, 0.0), inputs.sigma)
-        ratio = av.full_ratio(position, ages[:, :, j], talent[:, :, j], terms, draft, ina, st)
-        if ratio is not None and season == clock.current:
-            ratio = inj.current_full_ratio(ratio)
-        if ratio is None:
-            inj.record(season, share, 1.0 - short_rate)
-            wins = games * ((1.0 - short_rate) * full_wins + short_rate * short_wins)
-        else:
-            # Full games from their own model; the rest are short appearances.
-            inj.record(season, share, ratio)
-            wins = games * (ratio * full_wins + (1.0 - ratio) * short_wins)
-        if grid is not None:
-            # Deep rosters: only the weeks he'd be in a lineup count.
-            wins = wins * share_at(grid, talent[:, :, j])
-        total += fmt.discount ** (season - clock.current) * alive * wins
+    total, _ = season_values(
+        position, inputs, fmt, rng, talent, ages, seasons, last_season, latest["player_id"].to_list(),
+        remaining, draft_start, draft_pick, roles=_next_roles(position, inputs, latest),
+    )
     return latest, total
 
 
@@ -647,6 +712,20 @@ def dwar_table(
     injury_weeks: pl.DataFrame | None = None,
 ) -> tuple[pl.DataFrame, dict]:
     """The DWAR output table and a summary of the inputs behind it."""
+    table, summary, _ = dwar_tables(fits, tables, schedules, fmt, cfg, likelihood, seed, min_plays, situation,
+                                    injury_weeks, picks=False)
+    return table, summary
+
+
+def dwar_tables(
+    fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame,
+    fmt: LeagueFormat, cfg: ValueConfig, likelihood: str | Mapping[str, str], seed: int,
+    min_plays: Mapping[str, int] | None = None, situation: dict[str, Covariates] | None = None,
+    injury_weeks: pl.DataFrame | None = None, picks: bool = True,
+):
+    """`dwar_table`, plus rookie draft pick values (value/picks.py
+    `PickValues`, or None) when `cfg.picks` is set and `picks` is true.
+    Picks use their own random stream, so player values do not change."""
     rng = np.random.default_rng(seed)
     inputs = value_inputs(fits, tables, schedules, fmt, cfg, likelihood, rng, min_plays, situation, injury_weeks)
     frames = []
@@ -692,4 +771,18 @@ def dwar_table(
         "injury_history": inputs.injury is not None,
         "games_talent_knot": {p: round(k, 2) for p, k in inputs.availability.games_knot.items()},
     }
-    return table, summary
+    pick_values = None
+    if picks and cfg.picks is not None:
+        from dwar.value.picks import pick_values as _pick_values
+
+        pick_values = _pick_values(fits, tables, schedules, inputs, fmt, cfg, dict(min_plays or {}),
+                                   np.random.default_rng([seed, 7]))
+        summary["rookie_draft_picks"] = {
+            "years": sorted(pick_values.picks["pick_year"].unique().to_list()),
+            "rounds": fmt.rookie_rounds, "teams": fmt.teams,
+            "classes": sorted(pick_values.rookies["draft_year"].unique().to_list()),
+            "rookie_season_models": {p: m.n for p, m in pick_values.models.items()},
+            "hit_ppg": {p: round(v, 2) for p, v in pick_values.levels["hit"].items()},
+            "bust_ppg": {p: round(v, 2) for p, v in pick_values.levels["bust"].items()},
+        }
+    return table, summary, pick_values

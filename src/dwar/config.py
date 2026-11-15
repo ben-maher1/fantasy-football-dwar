@@ -76,6 +76,7 @@ class LeagueFormat(_Frozen):
     lineup: dict[str, int]
     discount: float = Field(default=0.85, gt=0, le=1)
     roster: RosterSettings | None = None
+    rookie_rounds: int = Field(default=5, gt=0)   # rookie draft rounds (ben, 2026-11-14: 5 rounds of `teams`)
 
     @model_validator(mode="after")
     def _roster_fits(self) -> LeagueFormat:
@@ -194,6 +195,17 @@ class LatePick(_Frozen):
     factors: tuple[float, ...] = (1.0, 0.85, 0.80)  # talent scale 1, 2, 3+ seasons after it
 
 
+class Picks(_Frozen):
+    """Rookie draft pick values (value/picks.py, plan approved by ben 2026-11-14)."""
+
+    first_class: int = 2013        # earliest NFL class used as a sample of draft-day credentials
+    history_first: int = 2006      # earliest class the rookie-season games models learn from
+    years: int = Field(default=5, gt=0)  # future rookie drafts valued: next season's and those after
+    games_talent_corr: dict[str, float] = {}  # rookie-season games vs talent draws, by position (value/picks.py couple_to_talent)
+    talent_scale: dict[str, float] = {}   # multiply rookies' projected talent, by position, to match real careers
+    prior_shape: bool = False      # bend the rookie prior's straight line in log pick to the fit's own rookies (value/picks.py)
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
@@ -217,6 +229,7 @@ class ValueConfig(_Frozen):
     full_games: tuple[str, ...] = ()         # positions valued on full games (own model), not games played x short chance
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
+    picks: Picks | None = None               # rookie draft pick values (value/picks.py); None = not valued
 
 
 def _read_yaml(path: Path) -> dict:

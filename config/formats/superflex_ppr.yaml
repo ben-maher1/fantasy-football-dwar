@@ -10,3 +10,4 @@ lineup:
   FLEX: 2        # RB/WR/TE
   SUPERFLEX: 1   # QB/RB/WR/TE
 discount: 0.80   # ben, 2026-11-07 (with a 5-season horizon)
+rookie_rounds: 5   # rookie draft rounds (ben, 2026-11-14)
