@@ -107,6 +107,33 @@ VARIANTS: dict[str, dict] = {
     # rb_fill = rb_usage + a shift in those games.
     "rb_fill": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                 "usage": (POSITION,), "fill_in": (POSITION,), "sampler": {"draws": 3500}},
+    # TE step 1 (plan "game-by-game TE model with usage and efficiency",
+    # ben 2026-11-14): the current TE model (season level, with growth and
+    # first-round step as config/model.yaml has for TE) vs the game-by-game
+    # model with young steps. Run with DWAR_POSITION=TE.
+    "te_base": {"game_steps": (), "qb_drift": (), "young_steps": (), "sampler": {"draws": 3500}},
+    "te_career": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                  "sampler": {"draws": 3500}},
+    # Result (2026-11-15): mixed, not kept (discounted log +.003 / -.006 /
+    # -.004 / +.015 on p14 / p17 / dev / holdout); rest-of-season better in
+    # all four, two+ seasons out worse for young TEs. te_form = te_career
+    # without the young steps.
+    "te_form": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (), "form_rho": None,
+                "sampler": {"draws": 3500}},
+    # te_form result (2026-11-15): tie/worse, not kept (discounted log
+    # -.007 / -.003 / -.004 / +.012 on p14 / p17 / dev / holdout; 2 of 4 fits
+    # just missed R-hat). So TE stays season level and step 2 (in-season
+    # targets) was not run.
+    # TE step 3: te_base + an offseason drift with the player's own yards
+    # per target (features/efficiency.py) through the QB-drift machinery,
+    # faded into later seasons as estimated from the data (fade_qb).
+    "te_eff": {"game_steps": (), "qb_drift": (POSITION,), "eff_drift": (POSITION,), "young_steps": (), "fade_qb": True,
+               "sampler": {"draws": 3500}},
+    # te_eff result (2026-11-15): worse in all four periods, not kept
+    # (discounted log -.004 / -.008 / -.024 / -.001; MAE -.097 on dev). The
+    # next-season miss of high-target, low-yards-per-target TEs (about 1 PPG,
+    # 45 TE seasons) is real in the residuals but too small and rare for a
+    # term on every TE to pay for itself.
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
@@ -308,6 +335,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
         _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
         fill_in=POSITION in cfg.fill_in,
+        eff_rating=POSITION in cfg.eff_drift,
         prospect_covariates=None if prospect is None else prospect.select("player_id", *cfg.prospect[POSITION]),
     )
     if full.prospect_x_names != settings.prospect_names:

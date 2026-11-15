@@ -95,6 +95,12 @@ def player_weeks(snap: AsOfSnapshot, scoring: ScoringConfig) -> pl.DataFrame:
                  .join(team_car, on=["game_id", "team"], how="left")
                  .with_columns(carry_share=pl.when(pl.col("team_carries") > 0)
                                .then(pl.col("carries").fill_null(0) / pl.col("team_carries")).otherwise(None)))
+    rec = [c for c in ("targets", "receiving_yards") if c in snap.stats.columns]
+    if rec:
+        # Targets and receiving yards, for a receiver's own yards per target
+        # (features/efficiency.py).
+        weeks = weeks.join(snap.stats.select("player_id", "game_id", *rec).unique(["player_id", "game_id"]),
+                           on=["player_id", "game_id"], how="left")
     weeks = flag_injury_exits(weeks)
     positions = _season_positions(snap, weeks.select("player_id", "season"))
     qb = team_qb_ratings(snap.stats)

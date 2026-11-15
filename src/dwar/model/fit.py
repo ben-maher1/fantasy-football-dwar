@@ -240,6 +240,7 @@ def position_data(
         season_range_covariates=c.range if c is not None and c.range.width > 2 else None,
         injury_exits="drop" if position in cfg.injury_exits else "keep",
         fill_in=position in cfg.fill_in,
+        eff_rating=position in cfg.eff_drift,
         **extra,
     )
 
