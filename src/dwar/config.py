@@ -140,6 +140,7 @@ class ModelConfig(_Frozen):
     game_steps: tuple[str, ...] = ()  # talent also steps after every game (model/talent.py)
     game_mode: str = "walk"           # "walk": lasting per-game steps; "form": decaying in-season form
     qb_drift: tuple[str, ...] = ()    # offseason talent drift with the QB rating (model/talent.py)
+    eff_drift: tuple[str, ...] = ()   # ... with the player's own yards per target instead (features/efficiency.py; needs qb_drift)
     form_rho: float | dict[str, float | None] | None = None  # hold the form decay rate fixed ("form" mode), per position if a dict; None = estimate it
 
     def form_rho_for(self, position: str) -> float | None:

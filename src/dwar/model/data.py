@@ -187,6 +187,7 @@ def build_model_data(
     reference_players: tuple[str, ...] | None = None,
     injury_exits: str = "keep",
     fill_in: bool = False,
+    eff_rating: bool = False,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
@@ -363,6 +364,14 @@ def build_model_data(
                 raise ValueError("fill_in needs player_weeks.fill_in")
             obs_usage = np.column_stack([obs_usage, obs["fill_in"].fill_null(False).to_numpy().astype(float)])
             ps_usage_next = np.column_stack([ps_usage_next, np.zeros(ps.height)])
+    if eff_rating:
+        # The player's own yards per target stands in for the QB rating
+        # (features/efficiency.py), from all his position's games.
+        from dwar.features.efficiency import efficiency_ratings
+
+        e = efficiency_ratings(tables.player_weeks, position).with_columns(pl.col("week").cast(pl.Int64))
+        obs = obs.drop("qb_rating", strict=False).join(e.rename({"eff_rating": "qb_rating"}),
+                                                       on=["player_id", "season", "week"], how="left").sort("_row")
     obs_qb = (obs["qb_rating"].fill_null(0.0).to_numpy().astype(float) if "qb_rating" in obs.columns
               else np.zeros(obs.height))
     ends = (pl.DataFrame({"ps_idx": obs["ps_idx"], "week": obs["week"], "q": obs_qb})

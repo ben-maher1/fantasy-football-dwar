@@ -114,6 +114,17 @@ VARIANTS: dict[str, dict] = {
     "te_base": {"game_steps": (), "qb_drift": (), "young_steps": (), "sampler": {"draws": 3500}},
     "te_career": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                   "sampler": {"draws": 3500}},
+    # Result (2026-11-15): mixed, not kept (discounted log +.003 / -.006 /
+    # -.004 / +.015 on p14 / p17 / dev / holdout); rest-of-season better in
+    # all four, two+ seasons out worse for young TEs. te_form = te_career
+    # without the young steps.
+    "te_form": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (), "form_rho": None,
+                "sampler": {"draws": 3500}},
+    # TE step 3: te_base + an offseason drift with the player's own yards
+    # per target (features/efficiency.py) through the QB-drift machinery,
+    # faded into later seasons as estimated from the data (fade_qb).
+    "te_eff": {"game_steps": (), "qb_drift": (POSITION,), "eff_drift": (POSITION,), "young_steps": (), "fade_qb": True,
+               "sampler": {"draws": 3500}},
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
@@ -315,6 +326,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
         _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
         fill_in=POSITION in cfg.fill_in,
+        eff_rating=POSITION in cfg.eff_drift,
         prospect_covariates=None if prospect is None else prospect.select("player_id", *cfg.prospect[POSITION]),
     )
     if full.prospect_x_names != settings.prospect_names:

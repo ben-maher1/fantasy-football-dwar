@@ -37,8 +37,9 @@ REGULAR_SEASON = "REG"
 
 # Plays a player passed or carried on, a snap-count proxy for every season.
 PLAY_COLUMNS = ("attempts", "sacks_suffered", "carries")
-# Passing EPA, for the QB rating of the passer a receiver played with (features/qb_rating.py).
-EXTRA_KEEP = ("passing_epa",)
+# Passing EPA, for the QB rating of the passer a receiver played with (features/qb_rating.py);
+# targets, for a receiver's own yards per target (features/efficiency.py).
+EXTRA_KEEP = ("passing_epa", "targets")
 STAT_KEEP = (
     "player_id", "player_display_name", "season", "week", "game_id", "team", "opponent_team",
     *sorted({c for cols in STAT_COLUMNS.values() for c in cols} | set(PLAY_COLUMNS) | set(EXTRA_KEEP)),
