@@ -47,6 +47,8 @@ class ModelData:
     prospect_x: np.ndarray   # (n_players, m) standardized prospect covariates
     prospect_x_names: tuple[str, ...]
     round1: np.ndarray | None = None        # (n_players,) first-round pick, for the rookie prior's first-round step
+    draft_pick: np.ndarray | None = None    # (n_players,) overall draft pick, NaN if undrafted (rookie_curve)
+    draft_pick_ref: np.ndarray | None = None  # drafted picks of the reference players: the curve feature's standardization
     # (n_ps,) 1 = rookie season (draft year, else first NFL season); 0 when the
     # career began before the window: such players start from the veteran
     # prior, which already reflects their career stage, so growth terms skip them.
@@ -76,6 +78,19 @@ class ModelData:
 
 
 FLAG_MERGE_SHARE = 0.01  # flags differing on fewer than this share of rows are merged
+
+
+def pick_curve(pick: np.ndarray, k: float, ref: np.ndarray) -> np.ndarray:
+    """Draft-slot curve feature exp(-(pick - 1) / k), standardized over the
+    drafted reference picks `ref`; 0 (the drafted average) where `pick` is
+    NaN (undrafted, who get their own term). With a positive coefficient the
+    prior falls steeply over the first picks and flattens toward a floor
+    (ben, 2026-11-15: in place of a straight line in log pick)."""
+    e = lambda x: np.exp(-(np.asarray(x, float) - 1.0) / k)
+    er = e(ref[np.isfinite(ref)])
+    mu, sd = float(er.mean()), float(er.std(ddof=1)) if len(er) > 1 else 1.0
+    out = (e(pick) - mu) / (sd or 1.0)
+    return np.where(np.isfinite(out), out, 0.0)
 
 
 def standardize_with_flags(
@@ -400,6 +415,8 @@ def build_model_data(
         season_vol_x_names=tuple(season_vol_x.columns),
         player_ids=tuple(players["player_id"].to_list()),
         log_pick_z=player_feats["log_pick_z"].to_numpy(),
+        draft_pick=static["draft_pick"].cast(pl.Float64).to_numpy(),
+        draft_pick_ref=drafted["draft_pick"].cast(pl.Float64).to_numpy(),
         undrafted=player_feats["undrafted"].to_numpy(),
         pre_window=player_feats["pre_window"].to_numpy(),
         prospect_x=prospect.to_numpy().astype(float),

@@ -12,7 +12,7 @@ import polars as pl
 
 from dwar.config import load_model_config
 from dwar.features.player_tables import PlayerTables
-from dwar.model.data import ModelData, build_model_data
+from dwar.model.data import ModelData, build_model_data, pick_curve
 from dwar.model.talent import (
     EARLY_GAMES,
     LIKELIHOOD_PARAMS,
@@ -59,6 +59,10 @@ USAGE_TRUTH = {
     "alpha_round1": 0.3, "growth": (0.25, 0.15), "growth_pick": (-0.1, -0.05),
     "sigma_eff": 0.25, "delta_x": 0.1, "sigma_x": 0.4, "nu_x": 10.0,
 }
+# Draft-slot curve truth (sqrt scale, simulate(curve_k=...)): the prior
+# rises with the standardized curve feature, and is tighter near the top.
+CURVE_TRUTH = {"alpha_pick": 0.5, "sd_curve": -0.3}
+
 # Game-step truth (sqrt scale): talent moves after every game, more early in a career.
 GAME_TRUTH = {"sigma_game": 0.06, "lam_game": 1.0}
 # "form" mode: decay held at FORM_RHO (as config holds it), form SD = form_ratio * sigma.
@@ -112,6 +116,7 @@ def simulate(
     usage: bool = False,
     game_steps: bool = False,
     form: bool = False,
+    curve_k: float | None = None,
 ) -> Simulated:
     """`season_effect`, if given, adds one season covariate with that true
     coefficient, to test the covariate slot. `range_effect`, if given, adds
@@ -120,7 +125,10 @@ def simulate(
     `usage`, the truth adds USAGE_TRUTH (sqrt scale) and the data carry
     weekly opportunity points (`Simulated.opportunity`). With `game_steps`,
     each week's latent talent adds GAME_TRUTH per-game steps (sqrt scale);
-    `talent` stays the per-season level the model reports."""
+    `talent` stays the per-season level the model reports. With `curve_k`,
+    the rookie prior's draft term is CURVE_TRUTH's alpha_pick times the
+    draft-slot curve feature (model/data.py pick_curve) instead of log pick,
+    and its spread is sigma_rookie * exp(sd_curve * curve)."""
     likelihood = likelihood or load_model_config().likelihood
     rng = np.random.default_rng(seed)
     player_rows, season_rows = [], []
@@ -171,13 +179,18 @@ def simulate(
     t = LATENT_TRUTH[scale_of(likelihood)]
     gamma = np.array([TRUE_GAMMA[scale_of(likelihood)].get(n, 0.0) for n in d0.prospect_x_names])
     rookie_mean = t["alpha0"] + t["alpha_pick"] * d0.log_pick_z + t["alpha_undrafted"] * d0.undrafted + d0.prospect_x @ gamma
+    rookie_sd = np.full(d0.n_players, t["sigma_rookie"])
+    if curve_k is not None:
+        cz = pick_curve(d0.draft_pick, curve_k, d0.draft_pick_ref)
+        rookie_mean = t["alpha0"] + CURVE_TRUTH["alpha_pick"] * cz + t["alpha_undrafted"] * d0.undrafted + d0.prospect_x @ gamma
+        rookie_sd = t["sigma_rookie"] * np.exp(CURVE_TRUTH["sd_curve"] * cz)
     u = USAGE_TRUTH
     if usage:
         X = np.column_stack([np.ones(d0.n_players), d0.log_pick_z, d0.undrafted])
         r1 = d0.round1 - X @ np.linalg.lstsq(X, d0.round1, rcond=None)[0]  # as the model codes it
         rookie_mean = rookie_mean + u["alpha_round1"] * r1
     prior_mean = np.where(d0.pre_window > 0, t["mu_vet"], rookie_mean)
-    prior_sd = np.where(d0.pre_window > 0, t["sigma_vet"], t["sigma_rookie"])
+    prior_sd = np.where(d0.pre_window > 0, t["sigma_vet"], rookie_sd)
     age_effect = t["beta1"] * d0.ps_age_c + t["beta2"] * d0.ps_age_c**2
     z = rng.normal(size=d0.n_ps)
     steps = np.where(

@@ -159,6 +159,10 @@ class ModelConfig(_Frozen):
     young_steps: tuple[str, ...] = ()  # lasting per-game talent steps for young players ("form" mode)
     early_noise: tuple[str, ...] = ()  # a player's first games get extra weekly noise (model/talent.py lam_noise)
     pick_sd: tuple[str, ...] = ()      # rookie prior spread depends on draft capital (sd_pick, sd_undrafted)
+    # Rookie prior on a curve in raw pick, floor + bump * exp(-(pick - 1) / k),
+    # instead of a line in log pick: position -> k in picks (model/talent.py).
+    rookie_curve: dict[str, float] = {}
+    rookie_curve_sd: tuple[str, ...] = ()  # ... and its spread varies along the curve (sd_curve; needs rookie_curve)
     # College prospect metrics in the rookie prior, by position (features/prospect.py METRICS).
     prospect: dict[str, tuple[str, ...]] = {}
     first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one

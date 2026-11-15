@@ -7,10 +7,11 @@ import numpy as np
 import pytest
 
 from dwar.config import load_model_config
+from dwar.model.data import pick_curve
 from dwar.model.fit import fit, sample
 from dwar.model.talent import scale_of
 
-from .simulate import SEASON_EFFECT, USAGE_TRUTH, simulate
+from .simulate import CURVE_TRUTH, SEASON_EFFECT, USAGE_TRUTH, simulate
 
 
 def core_config():
@@ -201,3 +202,30 @@ def test_early_noise_and_pick_sd_find_none_when_there_is_none(tmp_path):
     for name in ("lam_noise", "sd_pick", "sd_undrafted"):
         lo, hi = interval(result.posterior, name, 0.5, 99.5)
         assert lo < 0 < hi, (name, lo, hi)
+
+
+def test_rookie_curve_recovered(tmp_path):
+    """Rookie prior on the draft-slot curve (ben, 2026-11-15): simulated with
+    a known curve slope and a spread that tightens toward the top picks, the
+    fit's 99% intervals hold the true alpha_pick and sd_curve, and zero
+    for sd_undrafted (simulated with none)."""
+    k = 90.0
+    sim = simulate(n_players=200, seed=23, curve_k=k)
+    cfg = core_config().model_copy(update={"rookie_curve": {"WR": k}, "rookie_curve_sd": ("WR",)})
+    result = fit(sim.data, cfg, tmp_path)
+    assert result.diagnostics.passed, result.diagnostics.failures
+    post = result.posterior["posterior"]
+    assert "alpha_round1" not in post
+    assert float(post["curve_k"].values.ravel()[0]) == k
+    for name, truth in (("alpha_pick", CURVE_TRUTH["alpha_pick"]), ("sd_curve", CURVE_TRUTH["sd_curve"]), ("sd_undrafted", 0.0)):
+        lo, hi = interval(result.posterior, name, 0.5, 99.5)
+        assert lo < truth < hi, (name, lo, hi, truth)
+
+
+def test_pick_curve_feature():
+    """Standardized over the drafted reference picks; undrafted at 0; falls with pick."""
+    ref = np.array([1.0, 10.0, 50.0, 100.0, 200.0])
+    z = pick_curve(np.array([1.0, 50.0, 250.0, np.nan]), 90.0, ref)
+    e = np.exp(-(ref - 1) / 90.0)
+    assert np.isclose(z[0], (1.0 - e.mean()) / e.std(ddof=1))
+    assert z[0] > z[1] > z[2] and z[3] == 0.0
