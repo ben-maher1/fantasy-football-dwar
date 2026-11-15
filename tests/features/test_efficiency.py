@@ -1,7 +1,13 @@
 import polars as pl
 import pytest
 
-from dwar.features.efficiency import DEFAULT_YPT, SCALE, SHRINK_TARGETS, efficiency_ratings, with_efficiency_as_qb
+from dwar.features.efficiency import (
+    DEFAULT_YPT,
+    SCALE,
+    SHRINK_TARGETS,
+    efficiency_ratings,
+    with_efficiency_as_qb,
+)
 
 
 def _weeks() -> pl.DataFrame:
