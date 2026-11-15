@@ -1,6 +1,7 @@
 """One DWAR run: as-of tables -> talent fits for every position -> DWAR.
 
-Writes `outputs/{as_of}/{format}/dwar.parquet` and `diagnostics.json`. If any
+Writes `outputs/{as_of}/{format}/dwar.parquet`, `picks.parquet` (rookie
+draft pick values, when configured) and `diagnostics.json`. If any
 fit fails the gate, only the diagnostics are written (marked failed) and
 `FitFailed` is raised: nothing is published. The step 6 CLI wraps `run`.
 """
@@ -13,15 +14,22 @@ import time
 from datetime import date
 from pathlib import Path
 
-from dwar.config import REPO_ROOT, load_format, load_model_config, load_scoring, load_value_config, uses_situation
+from dwar.config import (
+    REPO_ROOT,
+    load_format,
+    load_model_config,
+    load_scoring,
+    load_value_config,
+    uses_situation,
+)
 from dwar.features.asof import RawTables, asof_snapshot
 from dwar.features.injuries import InjuryRaw, injury_weeks
-from dwar.features.player_tables import build_player_tables
 from dwar.features.opportunity import opportunity_table
+from dwar.features.player_tables import build_player_tables
 from dwar.features.situation import SituationRaw, model_covariates, prepare
 from dwar.model.diagnostics import FitFailed
 from dwar.model.fit import fit_positions
-from dwar.value.dwar import dwar_table, season_clock
+from dwar.value.dwar import dwar_tables, season_clock
 
 log = logging.getLogger(__name__)
 
@@ -68,12 +76,14 @@ def run(
     weeks = None
     if value_cfg.injury_history:
         weeks = injury_weeks(injury_raw or InjuryRaw.from_cache(), snap.schedules, tables.player_weeks, as_of)
-    table, summary = dwar_table(
+    table, summary, picks = dwar_tables(
         fits, tables, snap.schedules, fmt, value_cfg, model_cfg.likelihoods(), model_cfg.seed, model_cfg.min_plays,
         cov, weeks,
     )
     path = out / "dwar.parquet"
     table.write_parquet(path)
+    if picks is not None:
+        picks.picks.write_parquet(out / "picks.parquet")
     diagnostics.update(
         passed=True,
         runtime_s=round(time.perf_counter() - start, 1),

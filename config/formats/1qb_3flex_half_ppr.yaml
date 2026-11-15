@@ -20,3 +20,4 @@ roster:
     WR: 10
     TE: 4
   weekly: [QB]   # QBs measured per team game, as in the other tabs (2026-11-14)
+rookie_rounds: 5   # rookie draft rounds (ben, 2026-11-14)

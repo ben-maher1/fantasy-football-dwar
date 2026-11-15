@@ -22,3 +22,4 @@ roster:
     WR: 10
     TE: 4
   weekly: [QB]
+rookie_rounds: 5   # rookie draft rounds (ben, 2026-11-14)
