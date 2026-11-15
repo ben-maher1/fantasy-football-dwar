@@ -120,11 +120,20 @@ VARIANTS: dict[str, dict] = {
     # without the young steps.
     "te_form": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (), "form_rho": None,
                 "sampler": {"draws": 3500}},
+    # te_form result (2026-11-15): tie/worse, not kept (discounted log
+    # -.007 / -.003 / -.004 / +.012 on p14 / p17 / dev / holdout; 2 of 4 fits
+    # just missed R-hat). So TE stays season level and step 2 (in-season
+    # targets) was not run.
     # TE step 3: te_base + an offseason drift with the player's own yards
     # per target (features/efficiency.py) through the QB-drift machinery,
     # faded into later seasons as estimated from the data (fade_qb).
     "te_eff": {"game_steps": (), "qb_drift": (POSITION,), "eff_drift": (POSITION,), "young_steps": (), "fade_qb": True,
                "sampler": {"draws": 3500}},
+    # te_eff result (2026-11-15): worse in all four periods, not kept
+    # (discounted log -.004 / -.008 / -.024 / -.001; MAE -.097 on dev). The
+    # next-season miss of high-target, low-yards-per-target TEs (about 1 PPG,
+    # 45 TE seasons) is real in the residuals but too small and rare for a
+    # term on every TE to pay for itself.
     "games": {"game_steps": (POSITION,)},        # + talent steps after every game
     # games was a bit worse: its lasting per-game steps made later seasons
     # too uncertain. form keeps lasting change at the offseason and makes
