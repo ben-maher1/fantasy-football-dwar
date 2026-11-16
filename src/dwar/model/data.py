@@ -93,6 +93,17 @@ def pick_curve(pick: np.ndarray, k: float, ref: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(out), out, 0.0)
 
 
+def pick_quad_feature(z: np.ndarray, ref: np.ndarray, undrafted: np.ndarray | None = None) -> np.ndarray:
+    """Squared standardized log pick, standardized over the drafted
+    reference values `ref` (so it trades off less with the line term); 0
+    where `undrafted` (they have their own term). The rookie prior's
+    quadratic in log pick (ben, 2026-11-16)."""
+    r2 = np.asarray(ref, float) ** 2
+    mu, sd = float(r2.mean()), float(r2.std(ddof=1)) if len(r2) > 1 else 1.0
+    out = (np.asarray(z, float) ** 2 - mu) / (sd or 1.0)
+    return out if undrafted is None else np.where(np.asarray(undrafted) > 0, 0.0, out)
+
+
 def standardize_with_flags(
     df: pl.DataFrame, columns: tuple[str, ...], ref: pl.DataFrame | None = None,
 ) -> pl.DataFrame:

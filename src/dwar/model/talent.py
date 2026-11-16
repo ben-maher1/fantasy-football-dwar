@@ -55,7 +55,7 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
-from dwar.model.data import ModelData, pick_curve
+from dwar.model.data import ModelData, pick_curve, pick_quad_feature
 
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
@@ -310,7 +310,7 @@ def build_talent_model(
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
     season_bump: bool = False, season_bump_first: bool = True, rookie_fluke: bool = False,
     usage: bool = False, early_noise: bool = False, pick_sd: bool = False,
-    curve_k: float | None = None, curve_sd: bool = False,
+    curve_k: float | None = None, curve_sd: bool = False, pick_quad: bool = False,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -370,7 +370,10 @@ def build_talent_model(
     (ben, 2026-11-15). `round1` is ignored with it. `curve_k` is saved as a
     constant ("curve_k") so the value layer can rebuild the feature. With
     `curve_sd` too, the spread is sigma_rookie * exp(sd_curve * curve +
-    sd_undrafted * undrafted)."""
+    sd_undrafted * undrafted).
+
+    With `pick_quad` (not with `curve_k`), the draft term adds alpha_pick2 *
+    pick_quad_feature(log_pick_z): a quadratic in log pick (ben, 2026-11-16)."""
     use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
     if use_opp:
         seen = np.isfinite(d.x)
@@ -405,7 +408,10 @@ def build_talent_model(
             pick_x = pick_curve(d.draft_pick, curve_k, d.draft_pick_ref)
             pm.Deterministic("curve_k", pt.as_tensor_variable(np.float64(curve_k)))
         rookie_mean = alpha0 + alpha_pick * pick_x + alpha_undrafted * d.undrafted
-        if round1 and curve_k is None and d.round1 is not None and d.round1.any():
+        if pick_quad and curve_k is None:
+            alpha_pick2 = pm.Normal("alpha_pick2", 0.0, pr["alpha_pick"])
+            rookie_mean = rookie_mean + alpha_pick2 * pick_quad_feature(d.log_pick_z, d.log_pick_z[d.undrafted == 0], d.undrafted)
+        if round1 and curve_k is None and not pick_quad and d.round1 is not None and d.round1.any():
             # The first-round flag minus its straight-line fit on log pick:
             # the same model as the raw flag, but alpha_round1 no longer
             # trades off against alpha_pick (raw, the pair mixed slowly).

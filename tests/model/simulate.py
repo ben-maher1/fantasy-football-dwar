@@ -12,7 +12,7 @@ import polars as pl
 
 from dwar.config import load_model_config
 from dwar.features.player_tables import PlayerTables
-from dwar.model.data import ModelData, build_model_data, pick_curve
+from dwar.model.data import ModelData, build_model_data, pick_curve, pick_quad_feature
 from dwar.model.talent import (
     EARLY_GAMES,
     LIKELIHOOD_PARAMS,
@@ -117,6 +117,7 @@ def simulate(
     game_steps: bool = False,
     form: bool = False,
     curve_k: float | None = None,
+    pick_quad: float | None = None,
 ) -> Simulated:
     """`season_effect`, if given, adds one season covariate with that true
     coefficient, to test the covariate slot. `range_effect`, if given, adds
@@ -184,6 +185,8 @@ def simulate(
         cz = pick_curve(d0.draft_pick, curve_k, d0.draft_pick_ref)
         rookie_mean = t["alpha0"] + CURVE_TRUTH["alpha_pick"] * cz + t["alpha_undrafted"] * d0.undrafted + d0.prospect_x @ gamma
         rookie_sd = t["sigma_rookie"] * np.exp(CURVE_TRUTH["sd_curve"] * cz)
+    if pick_quad is not None:  # quadratic in log pick, true coefficient `pick_quad`
+        rookie_mean = rookie_mean + pick_quad * pick_quad_feature(d0.log_pick_z, d0.log_pick_z[d0.undrafted == 0], d0.undrafted)
     u = USAGE_TRUTH
     if usage:
         X = np.column_stack([np.ones(d0.n_players), d0.log_pick_z, d0.undrafted])

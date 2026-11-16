@@ -229,3 +229,15 @@ def test_pick_curve_feature():
     e = np.exp(-(ref - 1) / 90.0)
     assert np.isclose(z[0], (1.0 - e.mean()) / e.std(ddof=1))
     assert z[0] > z[1] > z[2] and z[3] == 0.0
+
+
+def test_rookie_pick_quad_recovered(tmp_path):
+    """Quadratic in log pick (ben, 2026-11-16): simulated with a known
+    alpha_pick2, the fit's 99% interval holds it."""
+    sim = simulate(n_players=200, seed=29, pick_quad=-0.3)
+    cfg = core_config().model_copy(update={"rookie_pick_quad": ("WR",)})
+    result = fit(sim.data, cfg, tmp_path)
+    assert result.diagnostics.passed, result.diagnostics.failures
+    assert "alpha_round1" not in result.posterior["posterior"]
+    lo, hi = interval(result.posterior, "alpha_pick2", 0.5, 99.5)
+    assert lo < -0.3 < hi, (lo, hi)

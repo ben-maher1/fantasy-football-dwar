@@ -38,7 +38,7 @@ import polars as pl
 from dwar.config import LeagueFormat, ValueConfig
 from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
-from dwar.model.data import pick_curve
+from dwar.model.data import pick_curve, pick_quad_feature
 from dwar.value.availability import (
     Logistic,
     _sigmoid,
@@ -297,10 +297,12 @@ def rookie_latent(
         mean = take("alpha0")[:, None] + take("alpha_pick")[:, None] * cz[None, :]
     else:
         mean = take("alpha0")[:, None] + take("alpha_pick")[:, None] * z[None, :]
+    if "alpha_pick2" in post and not curve:
+        mean = mean + take("alpha_pick2")[:, None] * pick_quad_feature(z, d.log_pick_z[d.undrafted == 0])[None, :]
     if "alpha_round1" in post and coef is not None and not curve:
         r1 = np.asarray(round1, float) - np.column_stack([np.ones_like(z), z, np.zeros_like(z)]) @ coef
         mean = mean + take("alpha_round1")[:, None] * r1[None, :]
-    if shape and not curve:
+    if shape and not curve and "alpha_pick2" not in post:
         mean = mean + prior_shape_correction(r, idx, static, mu, sd) @ np.stack([np.ones_like(z), z, z**2])
     rookie_sd = take("sigma_rookie")[:, None]
     if "sd_pick" in post:
