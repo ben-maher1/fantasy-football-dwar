@@ -408,8 +408,8 @@ def pick_values(
     rows = rookie_season_rows(static, tables.player_seasons, tables.player_weeks, schedules, tables.as_of,
                               pc.history_first, min_plays, fitted)
     models = fit_rookie_seasons(rows, tuple(p for p in cfg.full_games if p in min_plays))
-    first = next(iter(fits.values()))
-    n_total = first.posterior["posterior"].sizes["chain"] * first.posterior["posterior"].sizes["draw"]
+    # The smallest fit's draw count, so every position has each index (draws differ by position).
+    n_total = min(r.posterior["posterior"].sizes["chain"] * r.posterior["posterior"].sizes["draw"] for r in fits.values())
     idx = draw_indices(n_total, cfg.draws)
     starter = {p: float(np.mean(v)) for p, v in _starter_levels(fits, inputs, fmt, cfg).items()}
     waiver = {p: float(np.mean(v)) for p, v in inputs.replacement.items()}

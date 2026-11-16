@@ -26,6 +26,14 @@ diagnostics:
 # made forecasts worse, for all seasons and for career years 1-2 only.
 rookie_round1: [QB, WR, TE]  # first-round step in the rookie prior, beyond log pick
 growth: [QB, WR, TE]         # lasting steps at career years 2 and 3, scaled by draft pick
+# RB rookie prior on a draft-slot curve, floor + bump * exp(-(pick - 1) / k), in
+# place of the line in log pick, with a spread that tightens toward the top
+# picks (ben, 2026-11-15: RBs only). Beat the line on five-year value in sample
+# (2013-21 classes) and out of sample (fits as of 2019-04-01, 2019-21 classes);
+# WR and TE were worse at the top out of sample, so they stay on the line.
+# k chosen leave-one-class-out on five-year value. reports/rookie_curve.
+rookie_curve: {RB: 105}
+rookie_curve_sd: [RB]
 # Game-by-game career model (plan "game-by-game career model and role
 # context", ben 2026-11-05), WR only so far: recent form that fades within a
 # season, and an offseason drift with the QB the player had last. Both beat
@@ -49,6 +57,7 @@ usage: [RB]
 draws_by_position:
   RB: 5000   # 3500 as validated (rb_usage); 2013-2026 fits just missed at 3500 (R-hat 1.012 h1) and 5000 (R-hat 1.0100 h0, hurdle terms); 7000 filled the disk
   WR: 4000   # the form decay rate mixes slowly (2000 draws: ESS ~320); young steps' size just missed R-hat at 3500
+  QB: 4000   # 2026-11-14/15 fits just missed R-hat at 2000 (1.011 at beta1); 4000 passed
 tune_by_position:
   RB: 2500   # longer tuning for the slow-mixing hurdle terms (h0, h1)
 # The game-by-game WR model was validated on 2013 on (ben: fewer, recent
