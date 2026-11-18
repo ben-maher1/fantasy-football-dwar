@@ -114,6 +114,16 @@ class DiagnosticThresholds(_Frozen):
     min_ess_tail: float = Field(gt=0)
 
 
+class HistoryPrior(_Frozen):
+    """Rookie-prior and age-curve terms learned from a longer, season-level
+    history fit and handed to a position's main fit as priors (model/history.py;
+    plan "RB rookie prior learned from longer draft history", ben 2026-11-18)."""
+    first_season: int = 1999   # earliest season in the history fit
+    as_of: date = date(2013, 3, 1)  # history fit sees seasons before this (the main fits' window starts in 2013)
+    terms: tuple[Literal["pick", "age"], ...] = ("pick",)  # which groups of terms are handed off
+    widen: float = Field(default=1.0, ge=1.0)  # multiply the handed-off SDs
+
+
 class ModelConfig(_Frozen):
     seed: int
     first_season: int
@@ -166,6 +176,7 @@ class ModelConfig(_Frozen):
     rookie_curve_sd: tuple[str, ...] = ()  # ... and its spread varies along the curve (sd_curve; needs rookie_curve)
     # College prospect metrics in the rookie prior, by position (features/prospect.py METRICS).
     prospect: dict[str, tuple[str, ...]] = {}
+    history_prior: dict[str, HistoryPrior] = {}  # positions whose rookie prior / age curve come from a history fit
     first_season_by_position: dict[str, int] = {}  # a shorter history window where a position uses one
     tune_by_position: dict[str, int] = {}   # sampler tuning steps where a position needs more than `sampler.tune`
     draws_by_position: dict[str, int] = {}  # sampler draws where a position needs more than `sampler.draws`

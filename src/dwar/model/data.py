@@ -214,11 +214,15 @@ def build_model_data(
     injury_exits: str = "keep",
     fill_in: bool = False,
     eff_rating: bool = False,
+    censored_start: bool = False,
 ) -> ModelData:
     """`season_covariates` is keyed by (player_id, season) and
     `prospect_covariates` by player_id; every remaining column is a numeric
     covariate. Prospect covariates are z-scored with missing flags
     (`standardize_with_flags`), on `reference_players` when given. Both slots are empty in v1 and filled by later steps.
+    With `censored_start` (history fits that start where the stats do, 1999),
+    players drafted before `first_season`, and undrafted players already
+    playing in it, are veterans rather than rookies.
     `season_range_covariates`, keyed like `season_covariates`, scale each
     season's random-walk step (see model/talent.py).
 
@@ -307,7 +311,14 @@ def build_model_data(
     player_feats = static.select(
         log_pick_z=(log_pick - mu) / (sd or 1.0),
         undrafted=pl.col("draft_pick").is_null().cast(pl.Float64),
-        pre_window=(pl.col("first_season").fill_null(first_season) < first_season).cast(pl.Float64),
+        pre_window=(
+            (pl.col("first_season").fill_null(first_season) < first_season)
+            # The stats start at `first_season`: players already there who were
+            # drafted earlier (or undrafted) entered before it, so they are veterans.
+            | (pl.lit(censored_start) & pl.when(pl.col("draft_year").is_null())
+               .then(pl.col("first_season").fill_null(first_season) <= first_season)
+               .otherwise(pl.col("draft_year") < first_season))
+        ).cast(pl.Float64),
     )
 
     prospect = standardize_with_flags(static, COMBINE_FEATURES, None if reference_players is None else ref_static)

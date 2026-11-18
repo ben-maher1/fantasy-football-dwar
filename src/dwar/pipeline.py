@@ -25,7 +25,7 @@ from dwar.config import (
 from dwar.features.asof import RawTables, asof_snapshot
 from dwar.features.injuries import InjuryRaw, injury_weeks
 from dwar.features.opportunity import opportunity_table
-from dwar.features.player_tables import build_player_tables
+from dwar.features.player_tables import PlayerTables, build_player_tables
 from dwar.features.situation import SituationRaw, model_covariates, prepare
 from dwar.model.diagnostics import FitFailed
 from dwar.model.fit import fit_positions
@@ -48,8 +48,13 @@ def run(
     model_cfg, value_cfg = load_model_config(), load_value_config()
     out = output_dir(as_of, format_name, root)
     out.mkdir(parents=True, exist_ok=True)
-    snap = asof_snapshot(raw or RawTables.from_cache(), as_of)
+    raw = raw or RawTables.from_cache()
+    snap = asof_snapshot(raw, as_of)
     tables = build_player_tables(snap, load_scoring(fmt.scoring))
+
+    def history_tables(on: date) -> PlayerTables:
+        return build_player_tables(asof_snapshot(raw, on), load_scoring(fmt.scoring))
+
     meta = {"as_of": as_of.isoformat(), "format": format_name, "scoring": fmt.scoring}
     cov = {}
     if uses_situation(model_cfg):
@@ -64,7 +69,7 @@ def run(
     diagnostics = {**meta, "passed": False, "fits": {}}
     try:
         opp = opportunity_table(tables, load_scoring(fmt.scoring)) if model_cfg.opportunity else None
-        fits = fit_positions(tables, model_cfg, out / "fits", meta, cov, opp)
+        fits = fit_positions(tables, model_cfg, out / "fits", meta, cov, opp, history_tables)
     except FitFailed:
         for p in model_cfg.positions:
             path = out / "fits" / f"{p.lower()}_diagnostics.json"
