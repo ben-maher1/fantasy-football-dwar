@@ -26,14 +26,13 @@ diagnostics:
 # made forecasts worse, for all seasons and for career years 1-2 only.
 rookie_round1: [QB, WR, TE]  # first-round step in the rookie prior, beyond log pick
 growth: [QB, WR, TE]         # lasting steps at career years 2 and 3, scaled by draft pick
-# RB rookie prior on a draft-slot curve, floor + bump * exp(-(pick - 1) / k), in
-# place of the line in log pick, with a spread that tightens toward the top
-# picks (ben, 2026-11-15: RBs only). Beat the line on five-year value in sample
-# (2013-21 classes) and out of sample (fits as of 2019-04-01, 2019-21 classes);
-# WR and TE were worse at the top out of sample, so they stay on the line.
-# k chosen leave-one-class-out on five-year value. reports/rookie_curve.
-rookie_curve: {RB: 105}
-rookie_curve_sd: [RB]
+# RB rookie prior: a quadratic in log pick, with a spread that depends on log pick
+# (pick_sd), in place of the straight line (ben, 2026-11-16: chose it over the
+# draft-slot curve, which tied it in sample and did a bit better out of sample;
+# both beat the line on five-year value). WR/TE stay on the line: the curve was
+# worse for them at the top out of sample. reports/rookie_curve.
+rookie_pick_quad: [RB]
+pick_sd: [RB]
 # Game-by-game career model (plan "game-by-game career model and role
 # context", ben 2026-11-05), WR only so far: recent form that fades within a
 # season, and an offseason drift with the QB the player had last. Both beat

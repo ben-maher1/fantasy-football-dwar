@@ -68,3 +68,32 @@ of 2026-09-01), Love goes from 10.8 to 5.7 DWAR on the league tab, and from #1 t
 Also in this change: the value layer now takes draw indices from the fit with the
 fewest draws (it assumed the first fit, QB). The QB fit as of 2026-11-14/15 just
 missed R-hat (1.011) with 2000 draws and passed with 4000.
+
+## Switch to a quadratic in log pick (ben, 2026-11-16/17)
+
+ben asked for a quadratic in log pick for the RB prior and chose it over the curve
+(decision card, 2026-11-17). Config: `rookie_pick_quad: [RB]` (alpha_pick2 times the
+standardized squared log-pick z) plus `pick_sd: [RB]` (spread
+`sigma_rookie * exp(sd_pick * z + sd_undrafted * undrafted)`). The curve option stays
+in the code, switched off. Five-year value, RBs, scored the same way as above
+(`quad_*_rb.csv`):
+
+| | Line | Curve + spread | Quadratic + spread |
+|---|---|---|---|
+| In sample, average miss (192) | 122.5 | 118.8 | 118.5 (vs curve −0.2±0.8) |
+| In sample, picks 1-32 miss (12) | 170 | 128 | 126 (vs curve −2.7±10.7) |
+| In sample, top-10 bias (5) | +187 | −115 | −58 |
+| Out of sample, average miss (62) | 119.4 | 113.7 | 116.9 (vs curve +3.1±1.5) |
+| Out of sample, log score vs line | | +0.041±0.014 | +0.034±0.013 |
+| Out of sample, picks 1-32 log score vs curve (4) | | | −0.075±0.047 |
+
+Fitted values (2026-09-01): alpha_pick −0.85, alpha_pick2 −0.23, sd_pick +0.39. At
+pick 3 (z ≈ −3.9) the prior spread is about 0.2 times the average rookie's, so
+early-round backs lean much harder on draft slot than before.
+
+Board (as of 2026-11-14, RB only refit, QB/WR/TE shared), league tab, line → curve →
+quadratic: Love 2.19 → 2.33 → 2.80 DWAR (#29 → #24 → #15; fitted talent 10.0 → 10.5
+→ 11.4 PPG), Price 0.82 → 1.15 → 1.12 (#97 → #79 → #82), Kyren Williams 2.55 → 2.44.
+Everyone else moves less than 0.11; the mean |change| is RB 0.015 and WR 0.009. 2027
+1.01 goes 3.87 → 3.37 → 3.42 and the 2027 1st 1.52 → 1.46 → 1.45. Preseason view
+(as of 2026-09-01): Love goes 10.76 → 5.70 → 6.97 and stays #1 with the quadratic.
