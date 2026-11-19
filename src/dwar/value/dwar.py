@@ -282,8 +282,8 @@ def value_inputs(
     """`injury_weeks` (features.injuries.injury_weeks, as of the run) turns on
     injury history in the availability models and the current-status cut."""
     clock = season_clock(schedules, tables.as_of)
-    first = next(iter(fits.values()))
-    n_total = first.posterior["posterior"].sizes["chain"] * first.posterior["posterior"].sizes["draw"]
+    # The smallest fit's draw count, so every position has each index (draws differ by position).
+    n_total = min(r.posterior["posterior"].sizes["chain"] * r.posterior["posterior"].sizes["draw"] for r in fits.values())
     idx = draw_indices(n_total, cfg.draws)
     draws = {
         p: PositionDraws.from_posterior(

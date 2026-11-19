@@ -55,7 +55,7 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from dwar.features.qb_rating import LOW_KNOT as QB_LOW_KNOT
-from dwar.model.data import ModelData
+from dwar.model.data import ModelData, pick_curve, pick_quad_feature
 
 LIKELIHOODS = ("sqrt_hurdle", "sqrt_hurdle_log", "studentt")
 HURDLE = ("sqrt_hurdle", "sqrt_hurdle_log")
@@ -310,6 +310,8 @@ def build_talent_model(
     young_steps: bool = False, season_rho: bool = False, season_rho_mean: str = "free",
     season_bump: bool = False, season_bump_first: bool = True, rookie_fluke: bool = False,
     usage: bool = False, early_noise: bool = False, pick_sd: bool = False,
+    curve_k: float | None = None, curve_sd: bool = False, pick_quad: bool = False,
+    informed: Mapping[str, tuple[float, float]] | None = None,
 ) -> pm.Model:
     """With `round1`, first-round picks get their own step in the rookie
     prior on top of log pick. With `growth`, career years 2 and 3 each add
@@ -359,7 +361,24 @@ def build_talent_model(
 
     With `pick_sd`, the rookie prior's spread depends on draft capital:
     sigma_rookie * exp(sd_pick * log_pick_z + sd_undrafted * undrafted), so
-    late picks' priors can be tighter (or wider) than early picks'."""
+    late picks' priors can be tighter (or wider) than early picks'.
+
+    With `curve_k` (needs `d.draft_pick`), the rookie prior's draft-slot
+    term is alpha_pick * pick_curve(pick, curve_k) instead of alpha_pick *
+    log_pick_z: a curve in raw pick, floor + bump * exp(-(pick - 1) / k),
+    that falls fast over the first picks and flattens toward a floor, in
+    place of a straight line in log pick that overshoots the top picks
+    (ben, 2026-11-15). `round1` is ignored with it. `curve_k` is saved as a
+    constant ("curve_k") so the value layer can rebuild the feature. With
+    `curve_sd` too, the spread is sigma_rookie * exp(sd_curve * curve +
+    sd_undrafted * undrafted).
+
+    With `pick_quad` (not with `curve_k`), the draft term adds alpha_pick2 *
+    pick_quad_feature(log_pick_z): a quadratic in log pick (ben, 2026-11-16).
+
+    `informed` maps parameter names (rookie-prior and age-curve terms) to
+    (mean, sd): those parameters get Normal(mean, sd) priors in place of the
+    defaults, handed off from a longer history fit (model/history.py)."""
     use_opp = opportunity and is_hurdle(likelihood) and has_opportunity(d)
     if use_opp:
         seen = np.isfinite(d.x)
@@ -382,14 +401,28 @@ def build_talent_model(
     }
     pr = PRIORS[scale_of(likelihood)]
     latent_scale = scale_of(likelihood)
+    informed = dict(informed or {})
+
+    def normal(name: str, mu: float, sd: float):
+        m, s = informed.pop(name, (mu, sd))
+        return pm.Normal(name, m, s)
+
     with pm.Model(coords=coords) as model:
         # Rookie prior: draft capital + prospect covariates.
-        alpha0 = pm.Normal("alpha0", *pr["alpha0"])
-        alpha_pick = pm.Normal("alpha_pick", 0.0, pr["alpha_pick"])
-        alpha_undrafted = pm.Normal("alpha_undrafted", 0.0, pr["alpha_undrafted"])
+        alpha0 = normal("alpha0", *pr["alpha0"])
+        alpha_pick = normal("alpha_pick", 0.0, pr["alpha_pick"])
+        alpha_undrafted = normal("alpha_undrafted", 0.0, pr["alpha_undrafted"])
         sigma_rookie = pm.HalfNormal("sigma_rookie", pr["sigma_rookie"])
-        rookie_mean = alpha0 + alpha_pick * d.log_pick_z + alpha_undrafted * d.undrafted
-        if round1 and d.round1 is not None and d.round1.any():
+        pick_x = d.log_pick_z
+        if curve_k is not None:
+            assert d.draft_pick is not None and d.draft_pick_ref is not None, "rookie_curve needs draft picks"
+            pick_x = pick_curve(d.draft_pick, curve_k, d.draft_pick_ref)
+            pm.Deterministic("curve_k", pt.as_tensor_variable(np.float64(curve_k)))
+        rookie_mean = alpha0 + alpha_pick * pick_x + alpha_undrafted * d.undrafted
+        if pick_quad and curve_k is None:
+            alpha_pick2 = normal("alpha_pick2", 0.0, pr["alpha_pick"])
+            rookie_mean = rookie_mean + alpha_pick2 * pick_quad_feature(d.log_pick_z, d.log_pick_z[d.undrafted == 0], d.undrafted)
+        if round1 and curve_k is None and not pick_quad and d.round1 is not None and d.round1.any():
             # The first-round flag minus its straight-line fit on log pick:
             # the same model as the raw flag, but alpha_round1 no longer
             # trades off against alpha_pick (raw, the pair mixed slowly).
@@ -413,8 +446,8 @@ def build_talent_model(
             beta2 = pm.Normal("age_fall", 0.0, pr["beta1"])
             beta3 = pm.Normal("age_fall2", 0.0, pr["beta2"])
         else:
-            beta1 = pm.Normal("beta1", 0.0, pr["beta1"])
-            beta2 = pm.Normal("beta2", 0.0, pr["beta2"])
+            beta1 = normal("beta1", 0.0, pr["beta1"])
+            beta2 = normal("beta2", 0.0, pr["beta2"])
             # Cubic: a^3 reaches ~1000 at 36, so its scale is a tenth of beta2's.
             beta3 = pm.Normal("beta3", 0.0, pr["beta2"] / 10) if age_curve == "cubic" else 0.0
             if age_curve == "late":
@@ -433,10 +466,16 @@ def build_talent_model(
             rookie_z = pm.Normal("rookie_z", 0.0, 1.0, shape=len(rookies))
             rookie_sd = sigma_rookie
             if pick_sd:
-                sd_pick = pm.Normal("sd_pick", 0.0, 0.5)
-                sd_undrafted = pm.Normal("sd_undrafted", 0.0, 0.5)
+                sd_pick = normal("sd_pick", 0.0, 0.5)
+                sd_undrafted = normal("sd_undrafted", 0.0, 0.5)
                 rookie_sd = sigma_rookie * pt.exp(sd_pick * d.log_pick_z[rookies] + sd_undrafted * d.undrafted[rookies])
+            elif curve_sd and curve_k is not None:
+                sd_curve = pm.Normal("sd_curve", 0.0, 0.5)
+                sd_undrafted = pm.Normal("sd_undrafted", 0.0, 0.5)
+                rookie_sd = sigma_rookie * pt.exp(sd_curve * pick_x[rookies] + sd_undrafted * d.undrafted[rookies])
             start = pt.set_subtensor(start[rookies], rookie_mean[rookies] + rookie_sd * rookie_z)
+        if informed:
+            raise ValueError(f"informed priors for parameters this model does not have: {sorted(informed)}")
         mu_vet = pm.Normal("mu_vet", *pr["mu_vet"])
         sigma_vet = pm.HalfNormal("sigma_vet", pr["sigma_vet"])
         if len(vets):

@@ -57,7 +57,7 @@ class FitResult:
 UNJITTERED = ("beta1", "beta2", "beta3", "age_slope_pre", "age_slope_post", "age_rise", "age_fall", "age_fall2", "age_late")
 
 
-def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
+def sample(d: ModelData, cfg: ModelConfig, informed: dict[str, tuple[float, float]] | None = None) -> DataTree:
     p = d.position
     model = build_talent_model(
         d, cfg.likelihood_for(p), cfg.age_curve.get(p, "quadratic"),
@@ -66,6 +66,8 @@ def sample(d: ModelData, cfg: ModelConfig) -> DataTree:
         game_steps=p in cfg.game_steps, game_mode=cfg.game_mode, qb_drift=p in cfg.qb_drift,
         form_rho=cfg.form_rho_for(p), tau_early=p in cfg.tau_early, tau_y3=p in cfg.tau_y3, season_rho=p in cfg.season_rho, season_rho_mean=cfg.season_rho_mean, season_bump=p in cfg.season_bump, season_bump_first=cfg.season_bump_first, rookie_fluke=p in cfg.rookie_fluke, usage=p in cfg.usage,
         young_steps=p in cfg.young_steps, early_noise=p in cfg.early_noise, pick_sd=p in cfg.pick_sd,
+        curve_k=cfg.rookie_curve.get(p), curve_sd=p in cfg.rookie_curve_sd, pick_quad=p in cfg.rookie_pick_quad,
+        informed=informed,
     )
     jitter = {rv for rv in model.free_RVs if rv.name not in UNJITTERED}
     compiled = nutpie.compile_pymc_model(model, jitter_rvs=jitter)
@@ -181,11 +183,15 @@ def posterior_predictive_check(d: ModelData, posterior: DataTree, likelihood: st
     return out
 
 
-def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None) -> FitResult:
-    """Sample, check, and write outputs under `out_dir`. Raises FitFailed."""
+def fit(
+    d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None,
+    informed: dict[str, tuple[float, float]] | None = None,
+) -> FitResult:
+    """Sample, check, and write outputs under `out_dir`. Raises FitFailed.
+    `informed`: priors handed off from a history fit (model/history.py)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
-    posterior = sample(d, cfg)
+    posterior = sample(d, cfg, informed)
     runtime = time.perf_counter() - start
 
     diag = check_fit(posterior, cfg.diagnostics)
@@ -200,6 +206,7 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         "n_players": d.n_players,
         "prospect_covariates": list(d.prospect_x_names),
         "season_covariates": list(d.season_x_names),
+        "informed_priors": {k: list(v) for k, v in (informed or {}).items()},
         "versions": {p: version(p) for p in ("pymc", "nutpie", "arviz", "nflreadpy")},
         **(meta or {}),
     }
@@ -213,6 +220,10 @@ def fit(d: ModelData, cfg: ModelConfig, out_dir: Path, meta: dict | None = None)
         raise FitFailed(diag)
 
     posterior.to_netcdf(out_dir / f"{name}.nc")
+    if informed:
+        from dwar.model.history import add_scale_check
+
+        add_scale_check(out_dir, d.position, posterior)
     talent = talent_summary(d, posterior)
     talent.write_parquet(out_dir / f"{name}_talent.parquet")
     return FitResult(data=d, posterior=posterior, diagnostics=diag, talent=talent)
@@ -248,15 +259,25 @@ def position_data(
 def fit_positions(
     tables: PlayerTables, cfg: ModelConfig, out_dir: Path, meta: dict | None = None,
     cov: dict[str, Covariates] | None = None, opportunity: pl.DataFrame | None = None,
+    history_tables=None,
 ) -> dict[str, FitResult]:
     """Fit every configured position. All positions are attempted so each
     writes its diagnostics; if any fails, raises FitFailed for the first
-    failure after the rest have run (the run is failed as a whole)."""
+    failure after the rest have run (the run is failed as a whole).
+    `history_tables(as_of)` gives player tables as of a date, for positions
+    with a history prior (`cfg.history_prior`, model/history.py)."""
     results, failures = {}, []
     for position in cfg.positions:
         d = position_data(tables, position, cfg, cov, opportunity)
         try:
-            results[position] = fit(d, cfg, out_dir, meta)
+            informed = None
+            if position in cfg.history_prior:
+                from dwar.model.history import history_priors
+
+                assert history_tables is not None, f"{position} has a history prior: pass history_tables"
+                informed = history_priors(position, cfg, d, history_tables(cfg.history_prior[position].as_of),
+                                          data_dir() / "history", out_dir)
+            results[position] = fit(d, cfg, out_dir, meta, informed)
         except FitFailed as e:
             failures.append(e)
     if failures:

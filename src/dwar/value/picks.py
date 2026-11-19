@@ -38,6 +38,7 @@ import polars as pl
 from dwar.config import LeagueFormat, ValueConfig
 from dwar.features.player_tables import PlayerTables
 from dwar.model.fit import FitResult
+from dwar.model.data import pick_curve, pick_quad_feature
 from dwar.value.availability import (
     Logistic,
     _sigmoid,
@@ -287,17 +288,28 @@ def rookie_latent(
 
     mu, sd, coef = _pick_scale(r, static)
     z = (np.log(np.asarray(pick, float)) - mu) / sd
-    mean = take("alpha0")[:, None] + take("alpha_pick")[:, None] * z[None, :]
-    if "alpha_round1" in post and coef is not None:
+    d = r.data
+    curve = "curve_k" in post
+    if curve:
+        # Curve-in-raw-pick prior (model/talent.py curve_k): no first-round
+        # step, and no log-pick shape correction on top of it.
+        cz = pick_curve(np.asarray(pick, float), float(np.asarray(post["curve_k"].values).ravel()[0]), d.draft_pick_ref)
+        mean = take("alpha0")[:, None] + take("alpha_pick")[:, None] * cz[None, :]
+    else:
+        mean = take("alpha0")[:, None] + take("alpha_pick")[:, None] * z[None, :]
+    if "alpha_pick2" in post and not curve:
+        mean = mean + take("alpha_pick2")[:, None] * pick_quad_feature(z, d.log_pick_z[d.undrafted == 0])[None, :]
+    if "alpha_round1" in post and coef is not None and not curve:
         r1 = np.asarray(round1, float) - np.column_stack([np.ones_like(z), z, np.zeros_like(z)]) @ coef
         mean = mean + take("alpha_round1")[:, None] * r1[None, :]
-    if shape:
+    if shape and not curve and "alpha_pick2" not in post:
         mean = mean + prior_shape_correction(r, idx, static, mu, sd) @ np.stack([np.ones_like(z), z, z**2])
     rookie_sd = take("sigma_rookie")[:, None]
     if "sd_pick" in post:
         rookie_sd = rookie_sd * np.exp(take("sd_pick")[:, None] * z[None, :])
+    if "sd_curve" in post and curve:
+        rookie_sd = rookie_sd * np.exp(take("sd_curve")[:, None] * cz[None, :])
     latent = mean + rookie_sd * rng.standard_normal(mean.shape)
-    d = r.data
     if "eta" in post and d.season_x.shape[1]:
         first = np.flatnonzero(d.ps_is_first & (d.pre_window[d.ps_player] == 0))
         if len(first):
@@ -398,8 +410,8 @@ def pick_values(
     rows = rookie_season_rows(static, tables.player_seasons, tables.player_weeks, schedules, tables.as_of,
                               pc.history_first, min_plays, fitted)
     models = fit_rookie_seasons(rows, tuple(p for p in cfg.full_games if p in min_plays))
-    first = next(iter(fits.values()))
-    n_total = first.posterior["posterior"].sizes["chain"] * first.posterior["posterior"].sizes["draw"]
+    # The smallest fit's draw count, so every position has each index (draws differ by position).
+    n_total = min(r.posterior["posterior"].sizes["chain"] * r.posterior["posterior"].sizes["draw"] for r in fits.values())
     idx = draw_indices(n_total, cfg.draws)
     starter = {p: float(np.mean(v)) for p, v in _starter_levels(fits, inputs, fmt, cfg).items()}
     waiver = {p: float(np.mean(v)) for p, v in inputs.replacement.items()}

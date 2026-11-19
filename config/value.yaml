@@ -25,7 +25,7 @@ survival_first_season: 1999  # survival trained on points per game since 1999, n
 injury_history: true     # weeks missed to injury in the last two seasons + current injury status (injury step)
 picks:                   # rookie draft pick values (value/picks.py; plan approved by ben 2026-11-14)
   first_class: 2013      # NFL classes from here to the latest draft are the samples of draft-day credentials
-  history_first: 2006    # rookie-season games/survival models learn from classes since
+  history_first: 2006    # rookie-season games/survival models learn from classes since (1999 tested 2026-11-19: a tie, reports/rb_history_prior)
   years: 5               # value the next 5 rookie drafts (2027-2031 as of 2026), all inside the 5-season window
   prior_shape: true      # bend the rookie prior's log-pick line to the fit's own rookies: it overrated top-8 NFL picks, underrated picks 17-100 (2026-11-15)
   games_talent_corr: {QB: 0.30, RB: 0.30, WR: 0.33, TE: 0.20}  # rookie-year games go more to the better draws (corr. of fit talent and games given pick, 2013-24 rookies)

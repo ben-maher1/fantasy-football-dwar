@@ -64,7 +64,9 @@ Latent structure:
   if step 5 validation shows noisy or misshapen curves. This drives the forward
   projection.
 - Prior for players with little NFL data: centered on draft capital (pick number,
-  transformed) plus combine/size where available, by position. Rookies and
+  transformed) plus combine/size where available, by position. RBs use a curve in
+  raw pick that flattens toward a floor, with a spread that tightens at the top
+  (ben, 2026-11-15; reports/rookie_curve); other positions use a line in log pick. Rookies and
   second-year players lean on this. Veterans are dominated by their data.
 - Usage covariates (snap share, target share, carry share, team pass rate) are a v2
   addition. Add them only if they improve out-of-sample forecasts.
