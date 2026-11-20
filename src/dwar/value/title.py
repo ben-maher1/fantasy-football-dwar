@@ -124,13 +124,15 @@ def champion(scores: np.ndarray, schedule: np.ndarray, fmt: SeasonFormat) -> np.
 # --- players: availability, weekly points, lineups -------------------------
 
 
-def availability(share: np.ndarray, weeks: int, run_weeks: float, rng: np.random.Generator) -> np.ndarray:
+def availability(share: np.ndarray, weeks: int, run_weeks: float | None, rng: np.random.Generator) -> np.ndarray:
     """(players, weeks) True when a player plays. Each player plays a share
     `share` of weeks on average, missing them in stretches averaging
-    `run_weeks` (a two-state chain started from its long-run state). Very low
+    `run_weeks` (a two-state chain started from its long-run state), or
+    independently each week when `run_weeks` is None. Very low
     shares lengthen the stretches so the average still holds."""
     s = np.clip(np.asarray(share, float), 1e-6, 1.0)
-    back = np.full_like(s, 1.0 / run_weeks)                  # P(out -> in)
+    # run_weeks None: each week independent (as DWAR's with-and-without step).
+    back = s.copy() if run_weeks is None else np.full_like(s, 1.0 / run_weeks)   # P(out -> in)
     leave = back * (1.0 - s) / s                             # P(in -> out), keeps the share
     over = leave > 1.0
     back = np.where(over, s / (1.0 - s + 1e-12), back)
@@ -218,6 +220,7 @@ class LeagueInputs:
     waiver: dict[str, float]          # waiver-level talent by position
     params: dict[str, dict]           # weekly-distribution params by position (scalars, this draw)
     likelihood: dict[str, str]
+    known: np.ndarray | None = None   # (players,) talent managers set lineups by; None = the true `talent`
 
 
 @dataclass(frozen=True)
@@ -265,7 +268,8 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
         n = len(mine)
         owner[k, :n] = rostered[mine]
         spos[k, :n] = li.pos[rostered[mine]]
-        key[k, :n] = np.where(avail_all[mine], li.talent[rostered[mine]][:, None], -np.inf)
+        seen = li.talent if li.known is None else li.known
+        key[k, :n] = np.where(avail_all[mine], seen[rostered[mine]][:, None], -np.inf)
         pts[k, :n] = all_pts[mine]
         spos[k, n_r:] = wpos
         for j, p in enumerate(wpos):

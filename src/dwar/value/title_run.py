@@ -136,6 +136,7 @@ def build_pool(as_of: date, format_name: str, season_ahead: int = 1) -> Pool:
 
 _POOL: Pool | None = None
 _SETTINGS: dict = {}
+_KNOWN: np.ndarray | None = None
 
 
 def _league_inputs(pool: Pool, d: int, spread: dict[str, float] | None = None) -> LeagueInputs:
@@ -151,6 +152,8 @@ def _league_inputs(pool: Pool, d: int, spread: dict[str, float] | None = None) -
         waiver=pool.waiver,
         params=params,
         likelihood=pool.likelihood,
+        # Managers set lineups by what they can know (posterior mean talent), not this draw's truth.
+        known=_KNOWN if _KNOWN is not None else pool.talent.mean(0),
     )
 
 
@@ -183,9 +186,10 @@ def _run_chunk(args: tuple[int, int, int]) -> dict:
 def run_leagues(pool: Pool, n_leagues: int, fmt_name: str, season: SeasonFormat, noise: float,
                 seed: int, workers: int = 4, chunk: int = 50,
                 spread: dict[str, float] | None = None) -> dict[str, np.ndarray]:
-    global _POOL, _SETTINGS
+    global _POOL, _SETTINGS, _KNOWN
     lf = load_format(fmt_name)
     _POOL = pool
+    _KNOWN = pool.talent.mean(0)
     _SETTINGS = dict(lineup=dict(lf.lineup), by_position=dict(lf.roster.by_position), teams=lf.teams,
                      fmt=season, noise=noise, spread=spread or {})
     jobs = [(s, min(chunk, n_leagues - s), seed) for s in range(0, n_leagues, chunk)]

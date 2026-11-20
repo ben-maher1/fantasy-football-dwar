@@ -82,3 +82,43 @@ uv run python -c "from datetime import date; from dwar.pipeline import run; run(
 uv run python -m dwar.value.title_run --as-of 2026-11-20 --format 1qb_3flex_half_ppr \
     --leagues 40000 --noise 0.5 --spread RB=1.35,WR=1.2,TE=1.25 --tag _cal
 ```
+
+## Update 2026-11-20 (later): DWAR check and TEs
+
+**Simulator fix.** Lineups were set by each draw's true talent, so simulated managers knew
+more than real ones. They now use posterior mean talent (`LeagueInputs.known`). Rerun
+(`--tag _known`): rank correlation 0.983, top-25 max move 7, 3 of the top 50 move more than
+10 (Kittle and Fannin up 11, Prescott up 10; Tyson down 11). Title odds per DWAR win: ranks
+1-10 4.16, 11-30 3.79, 31-60 3.50, 61-150 2.81; by position QB 3.77, TE 3.87, RB 3.53,
+WR 3.21. Contender vs rebuilder still about 11x. The star premium is larger than first
+reported, and the position pattern holds.
+
+**DWAR's with-and-without step, checked** (`decomp.py` in the thread's scratch work; per
+starter, points lost per team week, 1,500 leagues each; starters = top 12 QB/TE, top 24 RB/WR):
+
+| Setup | QB | TE | RB | WR |
+| --- | --- | --- | --- | --- |
+| DWAR's own grid | 3.13 | 2.83 | 4.50 | 4.75 |
+| E0: simulator on DWAR's setup | 3.15 | 2.84 | 4.48 | 4.67 |
+| E1a: 2027 projected pool (mean talent) | 3.32 | 2.94 | 4.24 | 4.44 |
+| E1c: + true talent spread, lineups by mean | 3.69 | 3.24 | 4.85 | 5.09 |
+| E2c: + each player's own games share | 4.90 | 3.29 | 5.30 | 5.52 |
+| E4c: + injury stretches, rostered by DWAR with noise | 5.12 | 3.43 | 5.41 | 5.52 |
+
+- The two engines agree on DWAR's setup (within 2%).
+- **Main finding:** DWAR gives every rostered player at a position the same chance of
+  playing a week (QB 72%, RB 74%, WR 79%, TE 82%). Backups really play less. Over 2014-25,
+  players ranked by last season's PPG played this share of next season's games:
+  QB 84% (top 12) vs 58% (13-36); RB 77% vs 55%; WR 83% vs 67%; TE 77% vs 73%.
+  Using each player's own expected share raises a starter's value by QB +33%, RB +9%,
+  WR +8%, TE +2%.
+- Talent spread (true talent differs from its mean) adds 10-15% at every position.
+  That changes the scale, not the order.
+- Injury stretches change nothing.
+
+**TEs.** In the title simulation TEs gain about 20% per DWAR win on WRs. About half of that
+is points: the simulated league says a TE costs his team about 12% more points, relative to
+DWAR, than a WR does. That comes from a thinner 2027 TE bench and from dynasty rostering,
+not from backup playing time (TE backups play nearly as much as starters). The other half is
+how points turn into titles: 4.3 title points per 100 points lost for TEs vs 4.0 for WRs.
+That part is not explained yet.
