@@ -1,0 +1,47 @@
+{
+  "as_of": "2026-11-20",
+  "format": "1qb_3flex_half_ppr",
+  "season": 2027,
+  "leagues": 40000,
+  "noise": 0.5,
+  "seed": 2026,
+  "spread": {
+    "RB": 1.35,
+    "WR": 1.2,
+    "TE": 1.25
+  },
+  "out_run_weeks": 2.1,
+  "season_format": {
+    "regular_weeks": 14,
+    "playoff_teams": 6,
+    "byes": 2
+  },
+  "waiver": {
+    "QB": 5.052297305877605,
+    "RB": 1.8619040291298083,
+    "WR": 3.010416926596441,
+    "TE": 2.7391336742254424
+  },
+  "runtime_s": {
+    "pool": 22.1,
+    "leagues": 199.6
+  },
+  "check_team_week_sd": {
+    "simulated": 21.6,
+    "dwar_sigma": 22.94
+  },
+  "title_share_by_strength_rank": [
+    0.3614,
+    0.2109,
+    0.142,
+    0.0957,
+    0.0672,
+    0.0466,
+    0.0304,
+    0.0216,
+    0.0132,
+    0.0064,
+    0.0036,
+    0.001
+  ]
+}

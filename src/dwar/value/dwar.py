@@ -263,6 +263,52 @@ def play_rate(player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: Leagu
     return out
 
 
+def play_rate_by_rank(
+    player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: LeagueFormat, min_games: int,
+    full: pl.DataFrame | None = None, games_by_season: dict[int, int] | None = None,
+) -> dict[str, np.ndarray]:
+    """Chance a rostered player plays a given fantasy week, by his depth
+    rank at his position (ben, 2026-11-20: backups play less than starters).
+
+    For each season s in `seasons`, players with `min_games`+ games in s-1
+    are ranked by points per game and the best teams x rostered[p] kept; the
+    rate is their games in s (full games for `fmt.roster.weekly` positions:
+    a backup QB's cameo does not start for a fantasy team) over s's weeks
+    (team games plus a bye). Players who are gone in s count 0. Pooled
+    over seasons by rank, smoothed by a running mean over `teams` ranks and
+    kept non-increasing with rank. Returns, per position, one rate per rank
+    (index 0 = best)."""
+    assert fmt.roster is not None
+    weekly = set(fmt.roster.weekly)
+    out = {}
+    for p, n in fmt.roster.by_position.items():
+        size = fmt.teams * n
+        if size == 0:
+            continue
+        rows = []
+        for s in seasons:
+            prev = (player_seasons.filter((pl.col("season") == s - 1) & (pl.col("position") == p)
+                                          & (pl.col("games_played") >= min_games))
+                    .sort("fpts_per_game", descending=True).head(size).select("player_id"))
+            if prev.height < size:
+                continue
+            if p in weekly and full is not None:
+                nxt = full.filter(pl.col("season") == s).select("player_id", g=pl.col("full"))
+            else:
+                nxt = (player_seasons.filter(pl.col("season") == s).group_by("player_id")
+                       .agg(g=pl.col("games_played").sum()))
+            g = prev.join(nxt, on="player_id", how="left", maintain_order="left")["g"].fill_null(0).to_numpy()
+            weeks = (games_by_season or {}).get(s, 17) + 1
+            rows.append(np.minimum(g / weeks, 1.0))
+        if not rows:
+            continue
+        rate = np.mean(rows, axis=0)
+        k = max(1, fmt.teams // 2)
+        smooth = np.convolve(np.pad(rate, k, mode="edge"), np.ones(2 * k + 1) / (2 * k + 1), mode="valid")
+        out[p] = np.minimum.accumulate(smooth)
+    return out
+
+
 def _full_so_far(player_weeks: pl.DataFrame, season: int, min_plays: dict[str, int]) -> pl.DataFrame:
     """player_id, full: games this season with at least the position's `min_plays` plays."""
     w = player_weeks.filter(pl.col("season") == season)
@@ -340,12 +386,20 @@ def value_inputs(
             {int(s): int(g) for s, g in season_games(schedules).select("season", "games").iter_rows()},
         )
         p_play = play_rate(tables.player_seasons, recent, fmt, cfg.pool_min_games)
-        start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play,
+        play = p_play
+        if cfg.play_by_rank:
+            games = {int(s): int(g) for s, g in season_games(schedules).select("season", "games").iter_rows()}
+            by_rank = play_rate_by_rank(
+                tables.player_seasons, clock.complete[-cfg.play_by_rank:], fmt, cfg.pool_min_games,
+                full_game_counts(tables.player_weeks, dict(min_plays or {})) if fmt.roster.weekly else None, games,
+            )
+            play = {**p_play, **by_rank}
+        start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), play,
                             np.random.default_rng(rng.integers(2**32)))
     marginal = None
     if fmt.roster is not None and cfg.with_without:
         waiver = {p: float(np.mean(v)) for p, v in replacement.items()}
-        marginal = marginal_points(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), p_play, waiver,
+        marginal = marginal_points(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), play, waiver,
                                    np.random.default_rng(rng.integers(2**32)))
     out = load_out_for_season(clock.current, news_as_of or tables.as_of)
     return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play, out,
@@ -562,6 +616,7 @@ class SeasonTrace:
     games: np.ndarray    # games played
     alive: np.ndarray    # 1 if still in the league
     wins: np.ndarray     # discounted wins added (already times alive)
+    full: np.ndarray     # share of games played that are full games (1 where not modelled)
 
 
 def season_values(
@@ -642,10 +697,11 @@ def season_values(
         add = fmt.discount ** (season - clock.current) * valued * wins
         total += add
         if out is not None:
-            out.append((talent[:, :, j], games, valued, add))
+            out.append((talent[:, :, j], games, valued, add,
+                        np.broadcast_to(1.0 if ratio is None else ratio, games.shape)))
     tr = None
     if out is not None:
-        tr = SeasonTrace(*(np.stack([o[k] for o in out], axis=-1) for k in range(4)))
+        tr = SeasonTrace(*(np.stack([o[k] for o in out], axis=-1) for k in range(5)))
     return total, tr
 
 
@@ -654,6 +710,17 @@ def position_dwar(
     fmt: LeagueFormat, cfg: ValueConfig, rng: np.random.Generator,
 ) -> tuple[pl.DataFrame, np.ndarray]:
     """DWAR draws (draws, players) for one position's active players."""
+    latest, total, _ = position_values(position, r, inputs, tables, fmt, cfg, rng)
+    return latest, total
+
+
+def position_values(
+    position: str, r: FitResult, inputs: ValueInputs, tables: PlayerTables,
+    fmt: LeagueFormat, cfg: ValueConfig, rng: np.random.Generator, trace: bool = False,
+) -> tuple[pl.DataFrame, np.ndarray, SeasonTrace | None]:
+    """`position_dwar`, plus the season-by-season trace with `trace`
+    (value/title.py reads a season's talent and games from it). Same random
+    draws either way."""
     clock, pd_ = inputs.clock, inputs.draws[position]
     latest = (
         r.data.ps_keys.with_row_index("ps_idx")
@@ -664,7 +731,7 @@ def position_dwar(
         .sort("player_id")
     )
     if latest.is_empty():
-        return latest, np.zeros((len(pd_.beta1), 0))
+        return latest, np.zeros((len(pd_.beta1), 0)), None
     last_season = latest["season"].to_numpy()
     last_age = latest["age_c"].to_numpy() + 26.0
     seasons = np.arange(clock.current - 1, clock.current + cfg.horizon_seasons + 1)
@@ -698,11 +765,11 @@ def position_dwar(
 
     use_draft = position in inputs.availability.draft_survival or position in inputs.availability.draft_games
     draft_start, draft_pick = _draft_info(tables, latest) if use_draft else (None, None)
-    total, _ = season_values(
+    total, tr = season_values(
         position, inputs, fmt, rng, talent, ages, seasons, last_season, latest["player_id"].to_list(),
-        remaining, draft_start, draft_pick, roles=_next_roles(position, inputs, latest),
+        remaining, draft_start, draft_pick, roles=_next_roles(position, inputs, latest), trace=trace,
     )
-    return latest, total
+    return latest, total, tr
 
 
 def dwar_table(

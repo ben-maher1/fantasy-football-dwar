@@ -243,6 +243,7 @@ class ValueConfig(_Frozen):
     starter_games: tuple[str, ...] = ()      # ... and games model
     with_without: bool = False               # roster formats: value = lineup points a typical team loses without him (test, 2026-11-14)
     full_games: tuple[str, ...] = ()         # positions valued on full games (own model), not games played x short chance
+    play_by_rank: int = 0                    # >0: rostered players' weekly play chance by depth rank, from this many recent seasons (ben, 2026-11-20); 0 = one rate per position
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
     picks: Picks | None = None               # rookie draft pick values (value/picks.py); None = not valued

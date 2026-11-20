@@ -108,9 +108,20 @@ def _best_lineup(avail: dict[str, np.ndarray], talent: dict[str, np.ndarray], li
     return start
 
 
+def _rate(p_play: dict[str, float | np.ndarray], p: str, ranks: np.ndarray) -> float | np.ndarray:
+    """Play chance for players at league `ranks` (best = 0): one rate per
+    position, or one per depth rank (dwar.play_rate_by_rank); ranks past
+    the end take the last rate."""
+    v = p_play.get(p, 1.0)
+    if np.ndim(v) == 0:
+        return float(v)
+    v = np.asarray(v)
+    return v[np.minimum(ranks, len(v) - 1)]
+
+
 def start_share(
     talent: dict[str, np.ndarray], lineup: dict[str, int], teams: int, rostered: dict[str, int],
-    p_play: dict[str, float], rng: np.random.Generator, weeks: int = 2000,
+    p_play: dict[str, float | np.ndarray], rng: np.random.Generator, weeks: int = 2000,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """How often a rostered player is in his team's lineup in a week he plays.
 
@@ -136,7 +147,7 @@ def start_share(
         for k in range(teams):
             ranks = roster[k]
             tal = {p: pools[p][r] for p, r in ranks.items()}
-            avail = {p: rng.random(len(r)) < p_play.get(p, 1.0) for p, r in ranks.items()}
+            avail = {p: rng.random(len(r)) < _rate(p_play, p, r) for p, r in ranks.items()}
             st = _best_lineup(avail, tal, lineup)
             for p, r in ranks.items():
                 plays[p][r] += avail[p]
@@ -151,7 +162,7 @@ def start_share(
 
 def marginal_points(
     talent: dict[str, np.ndarray], lineup: dict[str, int], teams: int, rostered: dict[str, int],
-    p_play: dict[str, float], waiver: dict[str, float], rng: np.random.Generator, weeks: int = 1000,
+    p_play: dict[str, float | np.ndarray], waiver: dict[str, float], rng: np.random.Generator, weeks: int = 1000,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """With-and-without value (ben, 2026-11-14): for each rostered player,
     the lineup points his team loses in a week he plays if he is gone, his
@@ -182,7 +193,7 @@ def marginal_points(
         for k in range(teams):
             ranks = roster[k]
             tal = {p: pools[p][r] for p, r in ranks.items()}
-            avail = {p: rng.random(len(r)) < p_play.get(p, 1.0) for p, r in ranks.items()}
+            avail = {p: rng.random(len(r)) < _rate(p_play, p, r) for p, r in ranks.items()}
             st = _best_lineup(avail, tal, lineup)
             base = float(sum(tal[p][st[p]].sum() for p in tal))
             for p, r in ranks.items():
