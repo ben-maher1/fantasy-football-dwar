@@ -159,7 +159,7 @@ def _run_chunk(args: tuple[int, int, int]) -> dict:
     s = _SETTINGS
     rng = np.random.default_rng([seed, start])
     D = _POOL.talent.shape[0]
-    cols = {k: [] for k in ("league", "draw", "player", "team", "delta", "started", "strength_rank")}
+    cols = {k: [] for k in ("league", "draw", "player", "team", "delta", "started", "lost", "strength_rank")}
     champ_rank, team_sd = [], []
     for li in range(start, start + n):
         d = li % D
@@ -172,6 +172,7 @@ def _run_chunk(args: tuple[int, int, int]) -> dict:
         cols["team"].append(r.team)
         cols["delta"].append(r.delta)
         cols["started"].append(r.started)
+        cols["lost"].append(r.lost)
         cols["strength_rank"].append(srank[r.team])
         champ_rank.append(int(srank[r.champ]))
         team_sd.append(r.week_sd)

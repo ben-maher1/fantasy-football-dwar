@@ -226,6 +226,7 @@ class LeagueResult:
     team: np.ndarray       # (rostered,) team
     delta: np.ndarray      # (rostered,) title(with) - title(without): -1, 0 or 1
     started: np.ndarray    # (rostered,) weeks in the lineup
+    lost: np.ndarray       # (rostered,) team points lost without him, regular season
     champ: int             # champion team
     strength: np.ndarray   # (teams,) mean weekly score
     week_sd: float         # week-to-week SD of a team's score, averaged over teams
@@ -305,7 +306,8 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
     sl = m[:, :n_r]
     return LeagueResult(
         player=owner[:, :n_r][sl], team=np.repeat(np.arange(teams)[:, None], n_r, 1)[sl],
-        delta=delta[sl].astype(float), started=started[sl], champ=champ, strength=base.mean(-1),
+        delta=delta[sl].astype(float), started=started[sl],
+        lost=(scores[:, :1, : fmt.regular_weeks] - scores[:, 1:, : fmt.regular_weeks]).sum(-1)[sl], champ=champ, strength=base.mean(-1),
         week_sd=float(base.std(-1, ddof=1).mean()), expected=expected,
     )
 
