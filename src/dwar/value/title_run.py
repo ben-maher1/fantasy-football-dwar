@@ -66,6 +66,7 @@ class Pool:
     params: dict[str, dict[str, np.ndarray]]   # position -> name -> (draws,)
     likelihood: dict[str, str]
     sigma: float                # DWAR's weekly team-score SD
+    season: int                 # the season valued
 
 
 def build_pool(as_of: date, format_name: str, season_ahead: int = 1) -> Pool:
@@ -127,6 +128,7 @@ def build_pool(as_of: date, format_name: str, season_ahead: int = 1) -> Pool:
                 for p, d in pdraws.items()},
         likelihood={p: for_position(model_cfg.likelihoods(), p) for p in pdraws},
         sigma=float(inputs.sigma),
+        season=inputs.clock.current + season_ahead,
     )
 
 
@@ -136,11 +138,18 @@ _POOL: Pool | None = None
 _SETTINGS: dict = {}
 
 
-def _league_inputs(pool: Pool, d: int) -> LeagueInputs:
+def _league_inputs(pool: Pool, d: int, spread: dict[str, float] | None = None) -> LeagueInputs:
+    """One draw's league inputs. `spread` multiplies a position's weekly
+    sqrt-scale spread (sigma); centers are re-solved so expected points stay
+    the same."""
+    spread = spread or {}
+    params = {p: {n: (float(v[d]) if np.ndim(v) else float(v)) for n, v in ps.items()} for p, ps in pool.params.items()}
+    for p, k in spread.items():
+        params[p]["sigma"] *= k
     return LeagueInputs(
         pos=pool.position, talent=pool.talent[d], share=pool.share[d], rank_z=rank_scores(pool.dwar_mean),
         waiver=pool.waiver,
-        params={p: {n: (float(v[d]) if np.ndim(v) else float(v)) for n, v in ps.items()} for p, ps in pool.params.items()},
+        params=params,
         likelihood=pool.likelihood,
     )
 
@@ -154,9 +163,9 @@ def _run_chunk(args: tuple[int, int, int]) -> dict:
     champ_rank, team_sd = [], []
     for li in range(start, start + n):
         d = li % D
-        r = simulate_league(_league_inputs(_POOL, d), s["lineup"], s["by_position"], s["teams"],
+        r = simulate_league(_league_inputs(_POOL, d, s["spread"]), s["lineup"], s["by_position"], s["teams"],
                             s["fmt"], s["noise"], OUT_RUN_WEEKS, rng)
-        srank = np.argsort(np.argsort(-r.strength))
+        srank = np.argsort(np.argsort(-r.expected))   # preseason roster strength
         cols["league"].append(np.full(len(r.player), li))
         cols["draw"].append(np.full(len(r.player), d))
         cols["player"].append(r.player)
@@ -171,12 +180,13 @@ def _run_chunk(args: tuple[int, int, int]) -> dict:
 
 
 def run_leagues(pool: Pool, n_leagues: int, fmt_name: str, season: SeasonFormat, noise: float,
-                seed: int, workers: int = 4, chunk: int = 50) -> dict[str, np.ndarray]:
+                seed: int, workers: int = 4, chunk: int = 50,
+                spread: dict[str, float] | None = None) -> dict[str, np.ndarray]:
     global _POOL, _SETTINGS
     lf = load_format(fmt_name)
     _POOL = pool
     _SETTINGS = dict(lineup=dict(lf.lineup), by_position=dict(lf.roster.by_position), teams=lf.teams,
-                     fmt=season, noise=noise)
+                     fmt=season, noise=noise, spread=spread or {})
     jobs = [(s, min(chunk, n_leagues - s), seed) for s in range(0, n_leagues, chunk)]
     ctx = mp.get_context("fork")
     with ctx.Pool(workers) as p:
@@ -237,6 +247,7 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=2026)
     ap.add_argument("--tag", default="")
+    ap.add_argument("--spread", default="", help="weekly spread factors, e.g. RB=1.35,WR=1.2,TE=1.25")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     t0 = time.perf_counter()
@@ -244,12 +255,13 @@ def main() -> None:
     t1 = time.perf_counter()
     log.info("pool built: %d players in %.0fs", len(pool.player_id), t1 - t0)
     season = SeasonFormat()
-    res = run_leagues(pool, a.leagues, a.format, season, a.noise, a.seed, a.workers)
+    spread = {k: float(v) for k, v in (x.split("=") for x in a.spread.split(",") if x)}
+    res = run_leagues(pool, a.leagues, a.format, season, a.noise, a.seed, a.workers, spread=spread)
     t2 = time.perf_counter()
     log.info("%d leagues in %.0fs", a.leagues, t2 - t1)
     lf = load_format(a.format)
     table, extra = summarize(pool, res, lf.teams)
-    season_year = season_clock(RawTables.from_cache().schedules, a.as_of).current + a.season_ahead
+    season_year = pool.season
     out = output_dir(a.as_of, a.format) / "title"
     out.mkdir(parents=True, exist_ok=True)
     stem = f"title_{season_year}{a.tag}"
@@ -257,7 +269,7 @@ def main() -> None:
     champ = np.bincount(res["champ_rank"], minlength=lf.teams) / len(res["champ_rank"])
     summary = {
         "as_of": a.as_of.isoformat(), "format": a.format, "season": season_year, "leagues": a.leagues,
-        "noise": a.noise, "seed": a.seed, "out_run_weeks": OUT_RUN_WEEKS,
+        "noise": a.noise, "seed": a.seed, "spread": spread, "out_run_weeks": OUT_RUN_WEEKS,
         "season_format": {"regular_weeks": season.regular_weeks, "playoff_teams": season.playoff_teams,
                           "byes": season.byes},
         "waiver": pool.waiver,

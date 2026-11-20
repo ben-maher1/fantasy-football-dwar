@@ -229,6 +229,7 @@ class LeagueResult:
     champ: int             # champion team
     strength: np.ndarray   # (teams,) mean weekly score
     week_sd: float         # week-to-week SD of a team's score, averaged over teams
+    expected: np.ndarray   # (teams,) preseason strength: best lineup's expected points x share
 
 
 WAIVER_COPIES = {"QB": 1, "RB": 5, "WR": 5, "TE": 4}
@@ -280,6 +281,14 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
     scores = np.stack([lineup_scores(kv[k], pv[k], spos[k], lineup) for k in range(teams)])  # (teams, V, weeks)
     base = scores[:, 0]                                      # (teams, weeks)
     # Weeks each slot started in the base lineup: points lost when removed > 0.
+    # Preseason strength: the best lineup by expected points per team game.
+    exp_pts = np.zeros((teams, slots))
+    for k in range(teams):
+        mine = owner[k] >= 0
+        exp_pts[k, mine] = li.talent[owner[k, mine]] * li.share[owner[k, mine]]
+        exp_pts[k, n_r:] = [li.waiver[p] for p in wpos]
+    exp_key = np.where((owner >= 0) | (np.arange(slots) >= n_r)[None], exp_pts, -np.inf)
+    expected = np.array([lineup_scores(exp_key[k], exp_pts[k], spos[k], lineup) for k in range(teams)])
     sched = round_robin(teams, weeks, rng)
     champ = int(champion(base, sched, fmt))
     # Counterfactual seasons: team k's row replaced by its variant v.
@@ -297,7 +306,7 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
     return LeagueResult(
         player=owner[:, :n_r][sl], team=np.repeat(np.arange(teams)[:, None], n_r, 1)[sl],
         delta=delta[sl].astype(float), started=started[sl], champ=champ, strength=base.mean(-1),
-        week_sd=float(base.std(-1, ddof=1).mean()),
+        week_sd=float(base.std(-1, ddof=1).mean()), expected=expected,
     )
 
 
