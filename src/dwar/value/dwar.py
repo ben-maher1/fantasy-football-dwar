@@ -562,6 +562,7 @@ class SeasonTrace:
     games: np.ndarray    # games played
     alive: np.ndarray    # 1 if still in the league
     wins: np.ndarray     # discounted wins added (already times alive)
+    full: np.ndarray     # share of games played that are full games (1 where not modelled)
 
 
 def season_values(
@@ -642,10 +643,11 @@ def season_values(
         add = fmt.discount ** (season - clock.current) * valued * wins
         total += add
         if out is not None:
-            out.append((talent[:, :, j], games, valued, add))
+            out.append((talent[:, :, j], games, valued, add,
+                        np.broadcast_to(1.0 if ratio is None else ratio, games.shape)))
     tr = None
     if out is not None:
-        tr = SeasonTrace(*(np.stack([o[k] for o in out], axis=-1) for k in range(4)))
+        tr = SeasonTrace(*(np.stack([o[k] for o in out], axis=-1) for k in range(5)))
     return total, tr
 
 
@@ -654,6 +656,17 @@ def position_dwar(
     fmt: LeagueFormat, cfg: ValueConfig, rng: np.random.Generator,
 ) -> tuple[pl.DataFrame, np.ndarray]:
     """DWAR draws (draws, players) for one position's active players."""
+    latest, total, _ = position_values(position, r, inputs, tables, fmt, cfg, rng)
+    return latest, total
+
+
+def position_values(
+    position: str, r: FitResult, inputs: ValueInputs, tables: PlayerTables,
+    fmt: LeagueFormat, cfg: ValueConfig, rng: np.random.Generator, trace: bool = False,
+) -> tuple[pl.DataFrame, np.ndarray, SeasonTrace | None]:
+    """`position_dwar`, plus the season-by-season trace with `trace`
+    (value/title.py reads a season's talent and games from it). Same random
+    draws either way."""
     clock, pd_ = inputs.clock, inputs.draws[position]
     latest = (
         r.data.ps_keys.with_row_index("ps_idx")
@@ -664,7 +677,7 @@ def position_dwar(
         .sort("player_id")
     )
     if latest.is_empty():
-        return latest, np.zeros((len(pd_.beta1), 0))
+        return latest, np.zeros((len(pd_.beta1), 0)), None
     last_season = latest["season"].to_numpy()
     last_age = latest["age_c"].to_numpy() + 26.0
     seasons = np.arange(clock.current - 1, clock.current + cfg.horizon_seasons + 1)
@@ -698,11 +711,11 @@ def position_dwar(
 
     use_draft = position in inputs.availability.draft_survival or position in inputs.availability.draft_games
     draft_start, draft_pick = _draft_info(tables, latest) if use_draft else (None, None)
-    total, _ = season_values(
+    total, tr = season_values(
         position, inputs, fmt, rng, talent, ages, seasons, last_season, latest["player_id"].to_list(),
-        remaining, draft_start, draft_pick, roles=_next_roles(position, inputs, latest),
+        remaining, draft_start, draft_pick, roles=_next_roles(position, inputs, latest), trace=trace,
     )
-    return latest, total
+    return latest, total, tr
 
 
 def dwar_table(
