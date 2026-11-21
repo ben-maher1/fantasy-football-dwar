@@ -250,10 +250,10 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
     swing: the title is decided again with his weeks taken away (his spot
     falls to the next best available, waiver players included).
 
-    With `qb_starters` (ben, 2026-11-21, as dwar.qb_starter_rates): the best
-    that many rostered QBs (by the talent managers see) are NFL starters,
-    each playing the mean share of the best `teams`; the rest never play,
-    and there is no waiver QB (an empty QB slot scores 0)."""
+    With `qb_starters` (ben, 2026-11-21): the best that many rostered QBs
+    (by the talent managers see) are NFL starters and play their own games
+    share; the rest never play, and there is no waiver QB (an empty QB slot
+    scores 0)."""
     weeks = fmt.weeks
     team = deal(li.rank_z, li.pos, by_position, teams, noise, rng, random_teams=random_deal)
     rostered = np.flatnonzero(team >= 0)
@@ -263,8 +263,7 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
         qbs = rostered[li.pos[rostered] == "QB"]
         qbs = qbs[np.argsort(-seen[qbs])]
         share = share.copy()
-        share[qbs] = 0.0
-        share[qbs[:qb_starters]] = float(li.share[qbs[:teams]].mean())
+        share[qbs[qb_starters:]] = 0.0     # spares never play; starters keep their own games share
         li = replace(li, share=share)
     # Waiver copies per team: always available at the waiver level.
     wpos = np.array([p for p, n in WAIVER_COPIES.items() if p in by_position and not (qb_starters and p == "QB")
