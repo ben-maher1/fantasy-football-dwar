@@ -408,14 +408,14 @@ def value_inputs(
         if cfg.qb_starters and "QB" in play:
             play["QB"] = qb_starter_rates(play["QB"], fmt.teams, cfg.qb_starters)
         start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), play,
-                            np.random.default_rng(rng.integers(2**32)))
+                            np.random.default_rng(rng.integers(2**32)), random_deal=cfg.random_deal)
     marginal = None
     if fmt.roster is not None and cfg.with_without:
         waiver = {p: float(np.mean(v)) for p, v in replacement.items()}
         if cfg.qb_starters:
             waiver["QB"] = 0.0   # every NFL starter is rostered: an empty QB slot scores 0
         marginal = marginal_points(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), play, waiver,
-                                   np.random.default_rng(rng.integers(2**32)))
+                                   np.random.default_rng(rng.integers(2**32)), random_deal=cfg.random_deal)
     out = load_out_for_season(clock.current, news_as_of or tables.as_of)
     return ValueInputs(clock, draws, replacement, sigma, availability, short, situation, injury, start, p_play, out,
                        marginal)
