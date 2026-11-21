@@ -263,6 +263,17 @@ def play_rate(player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: Leagu
     return out
 
 
+def qb_starter_rates(rate: float | np.ndarray, teams: int, starters: int) -> np.ndarray:
+    """QB play chance by depth rank when rosters keep every NFL starter
+    (ben, 2026-11-21): a benched rostered QB is dropped for whoever took the
+    job, so the best `starters` ranks play at a top-QB rate (byes and
+    injuries only: the mean of the best `teams` ranks of `rate`) and the
+    spares behind them never play."""
+    r = np.atleast_1d(np.asarray(rate, float))
+    top = float(r[: min(teams, len(r))].mean())
+    return np.concatenate([np.full(starters, top), [0.0]])
+
+
 def play_rate_by_rank(
     player_seasons: pl.DataFrame, seasons: tuple[int, ...], fmt: LeagueFormat, min_games: int,
     full: pl.DataFrame | None = None, games_by_season: dict[int, int] | None = None,
@@ -394,11 +405,15 @@ def value_inputs(
                 full_game_counts(tables.player_weeks, dict(min_plays or {})) if fmt.roster.weekly else None, games,
             )
             play = {**p_play, **by_rank}
+        if cfg.qb_starters and "QB" in play:
+            play["QB"] = qb_starter_rates(play["QB"], fmt.teams, cfg.qb_starters)
         start = start_share(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), play,
                             np.random.default_rng(rng.integers(2**32)))
     marginal = None
     if fmt.roster is not None and cfg.with_without:
         waiver = {p: float(np.mean(v)) for p, v in replacement.items()}
+        if cfg.qb_starters:
+            waiver["QB"] = 0.0   # every NFL starter is rostered: an empty QB slot scores 0
         marginal = marginal_points(pools, dict(fmt.lineup), fmt.teams, dict(fmt.roster.by_position), play, waiver,
                                    np.random.default_rng(rng.integers(2**32)))
     out = load_out_for_season(clock.current, news_as_of or tables.as_of)

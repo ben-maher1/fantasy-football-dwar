@@ -53,3 +53,14 @@ def test_backups_who_rarely_play_make_starters_worth_more():
                              np.random.default_rng(0), weeks=3000)
     # Talent ascending: the two starters are the last two entries.
     assert (ranked["QB"][1][-2:] > same["QB"][1][-2:] + 1.0).all()
+
+
+def test_qb_starter_rates_flat_then_zero():
+    from dwar.value.dwar import qb_starter_rates
+
+    rate = np.linspace(0.8, 0.4, 36)
+    r = qb_starter_rates(rate, 12, 32)
+    assert np.allclose(r[:32], rate[:12].mean())
+    # Ranks past the starters take the last rate: spares never play.
+    assert (_rate({"QB": r}, "QB", np.array([31, 32, 35])) == np.array([r[0], 0.0, 0.0])).all()
+    assert np.isclose(qb_starter_rates(0.72, 12, 32)[0], 0.72)
