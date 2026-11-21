@@ -167,7 +167,8 @@ def _run_chunk(args: tuple[int, int, int]) -> dict:
     for li in range(start, start + n):
         d = li % D
         r = simulate_league(_league_inputs(_POOL, d, s["spread"]), s["lineup"], s["by_position"], s["teams"],
-                            s["fmt"], s["noise"], OUT_RUN_WEEKS, rng)
+                            s["fmt"], s["noise"], OUT_RUN_WEEKS, rng,
+                            random_deal=s["random_deal"], qb_starters=s["qb_starters"])
         srank = np.argsort(np.argsort(-r.expected))   # preseason roster strength
         cols["league"].append(np.full(len(r.player), li))
         cols["draw"].append(np.full(len(r.player), d))
@@ -188,10 +189,13 @@ def run_leagues(pool: Pool, n_leagues: int, fmt_name: str, season: SeasonFormat,
                 spread: dict[str, float] | None = None) -> dict[str, np.ndarray]:
     global _POOL, _SETTINGS, _KNOWN
     lf = load_format(fmt_name)
+    _VCFG = load_value_config()
     _POOL = pool
     _KNOWN = pool.talent.mean(0)
     _SETTINGS = dict(lineup=dict(lf.lineup), by_position=dict(lf.roster.by_position), teams=lf.teams,
-                     fmt=season, noise=noise, spread=spread or {})
+                     fmt=season, noise=noise, spread=spread or {},
+                     # Same roster rules as the board (config/value.yaml).
+                     random_deal=_VCFG.random_deal, qb_starters=_VCFG.qb_starters)
     jobs = [(s, min(chunk, n_leagues - s), seed) for s in range(0, n_leagues, chunk)]
     ctx = mp.get_context("fork")
     with ctx.Pool(workers) as p:
@@ -274,7 +278,8 @@ def main() -> None:
     champ = np.bincount(res["champ_rank"], minlength=lf.teams) / len(res["champ_rank"])
     summary = {
         "as_of": a.as_of.isoformat(), "format": a.format, "season": season_year, "leagues": a.leagues,
-        "noise": a.noise, "seed": a.seed, "spread": spread, "out_run_weeks": OUT_RUN_WEEKS,
+        "noise": a.noise, "seed": a.seed,
+        "random_deal": load_value_config().random_deal, "qb_starters": load_value_config().qb_starters, "spread": spread, "out_run_weeks": OUT_RUN_WEEKS,
         "season_format": {"regular_weeks": season.regular_weeks, "playoff_teams": season.playoff_teams,
                           "byes": season.byes},
         "waiver": pool.waiver,

@@ -122,3 +122,25 @@ DWAR, than a WR does. That comes from a thinner 2027 TE bench and from dynasty r
 not from backup playing time (TE backups play nearly as much as starters). The other half is
 how points turn into titles: 4.3 title points per 100 points lost for TEs vs 4.0 for WRs.
 That part is not explained yet.
+
+## Update 2026-11-21: rerun on the new board rules
+
+The title simulation now uses the board's roster rules (config/value.yaml): rosters dealt to
+teams at random (`random_deal`), and the best 32 rostered QBs play as NFL starters with no
+waiver QB (`qb_starters`). Rerun: `--tag _nov21`, same settings as `_known`; DWAR is the new board.
+
+| | `_known` (Nov 20) | `_nov21` |
+| --- | --- | --- |
+| Rank correlation, DWAR top 150 | 0.980 | 0.961 |
+| Largest move, top 25 | 7 | 4 |
+| Top 50 moving more than 10 | 3 | 1 (Dart) |
+| Title odds per DWAR win, ranks 1-10 / 11-30 / 31-60 / 61-150 | 4.16 / 3.79 / 3.50 / 2.81 | 4.20 / 3.33 / 2.93 / 2.15 |
+| Per win, QB / TE / RB / WR | 3.77 / 3.87 / 3.53 / 3.21 | 3.11 / 3.10 / 3.03 / 2.88 |
+| Contender vs rebuilder, top 50 | 11x | 13x |
+
+- The position gap is mostly gone: the board's fixes (play by rank, QB starters) took up
+  most of what the title simulation saw extra for QBs and TEs.
+- The star premium is larger: the top 10 earn about twice as much per DWAR win as ranks 61-150.
+- Caveat: the simulation gives every top-32 QB the same games share (the top-12 mean), so a
+  QB's own projected games are overwritten. QBs projected to play less (Dart 61%, Mendoza 48%)
+  gain and healthy ones (Purdy, Maye) lose. QB title values here are not reliable.

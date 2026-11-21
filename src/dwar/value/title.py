@@ -30,7 +30,7 @@ All functions are pure numpy; `simulate_leagues` is the driver.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.special import ndtri
@@ -180,11 +180,12 @@ def lineup_scores(key: np.ndarray, pts: np.ndarray, pos: np.ndarray, lineup: dic
 
 
 def deal(rank_z: np.ndarray, pos: np.ndarray, by_position: dict[str, int], teams: int,
-         noise: float, rng: np.random.Generator) -> np.ndarray:
+         noise: float, rng: np.random.Generator, random_teams: bool = False) -> np.ndarray:
     """Team (0..teams-1) of each player, -1 if not rostered. Per position,
     players are ordered by `rank_z + noise x N(0, 1)` and the top
     `teams x by_position[p]` are dealt in snake order from a random team
-    order."""
+    order, or with `random_teams` to teams at random, `by_position[p]` each
+    (ben, 2026-11-21: a stud's team is no likelier to hold weak backups)."""
     team = np.full(len(pos), -1)
     for p, n in by_position.items():
         idx = np.flatnonzero(pos == p)
@@ -192,6 +193,9 @@ def deal(rank_z: np.ndarray, pos: np.ndarray, by_position: dict[str, int], teams
             continue
         key = rank_z[idx] + noise * rng.standard_normal(len(idx))
         chosen = idx[np.argsort(-key)][: teams * n]
+        if random_teams:
+            team[chosen] = rng.permutation(np.arange(len(chosen)) % teams)
+            continue
         perm = rng.permutation(teams)
         r = np.arange(len(chosen))
         snake = np.where((r // teams) % 2 == 0, r % teams, teams - 1 - r % teams)
@@ -240,15 +244,31 @@ WAIVER_COPIES = {"QB": 1, "RB": 5, "WR": 5, "TE": 4}
 
 
 def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[str, int], teams: int,
-                    fmt: SeasonFormat, noise: float, run_weeks: float, rng: np.random.Generator) -> LeagueResult:
+                    fmt: SeasonFormat, noise: float, run_weeks: float, rng: np.random.Generator,
+                    random_deal: bool = False, qb_starters: int = 0) -> LeagueResult:
     """Deal, play one season, and measure each rostered player's title
     swing: the title is decided again with his weeks taken away (his spot
-    falls to the next best available, waiver players included)."""
+    falls to the next best available, waiver players included).
+
+    With `qb_starters` (ben, 2026-11-21, as dwar.qb_starter_rates): the best
+    that many rostered QBs (by the talent managers see) are NFL starters,
+    each playing the mean share of the best `teams`; the rest never play,
+    and there is no waiver QB (an empty QB slot scores 0)."""
     weeks = fmt.weeks
-    team = deal(li.rank_z, li.pos, by_position, teams, noise, rng)
+    team = deal(li.rank_z, li.pos, by_position, teams, noise, rng, random_teams=random_deal)
     rostered = np.flatnonzero(team >= 0)
+    seen = li.talent if li.known is None else li.known
+    share = li.share
+    if qb_starters:
+        qbs = rostered[li.pos[rostered] == "QB"]
+        qbs = qbs[np.argsort(-seen[qbs])]
+        share = share.copy()
+        share[qbs] = 0.0
+        share[qbs[:qb_starters]] = float(li.share[qbs[:teams]].mean())
+        li = replace(li, share=share)
     # Waiver copies per team: always available at the waiver level.
-    wpos = np.array([p for p, n in WAIVER_COPIES.items() if p in by_position for _ in range(n)])
+    wpos = np.array([p for p, n in WAIVER_COPIES.items() if p in by_position and not (qb_starters and p == "QB")
+                     for _ in range(n)])
     n_r = max(int((team == k).sum()) for k in range(teams))
     slots = n_r + len(wpos)
     key = np.full((teams, slots, weeks), -np.inf)
@@ -268,7 +288,6 @@ def simulate_league(li: LeagueInputs, lineup: dict[str, int], by_position: dict[
         n = len(mine)
         owner[k, :n] = rostered[mine]
         spos[k, :n] = li.pos[rostered[mine]]
-        seen = li.talent if li.known is None else li.known
         key[k, :n] = np.where(avail_all[mine], seen[rostered[mine]][:, None], -np.inf)
         pts[k, :n] = all_pts[mine]
         spos[k, n_r:] = wpos

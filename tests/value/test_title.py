@@ -156,3 +156,28 @@ def test_title_curve_recovers_a_known_rising_curve():
     c = title_curve(t, s, d)
     assert c.at(np.array([15.0]), np.array([0.8]))[0] == pytest.approx(0.004 * 10 * 0.8, abs=0.006)
     assert (np.diff(c.value, axis=0) >= 0).all() and (np.diff(c.value, axis=1) >= 0).all()
+
+
+def test_random_deal_counts_and_mixes():
+    rng = np.random.default_rng(7)
+    pos = np.array(["QB"] * 40, object)
+    rz = rank_scores(np.arange(40.0)[::-1])
+    two_top = False
+    for _ in range(40):
+        team = deal(rz, pos, {"QB": 3}, 12, 0.0, rng, random_teams=True)
+        assert all((team == k).sum() == 3 for k in range(12))
+        assert (team[:36] >= 0).all() and (team[36:] < 0).all()
+        two_top |= any((team[:12] == k).sum() >= 2 for k in range(12))
+    assert two_top
+
+
+def test_qb_starters_spares_never_play_and_no_waiver_qb():
+    rng = np.random.default_rng(8)
+    li = _toy_league(30.0)
+    fmt = SeasonFormat(playoff_teams=4, byes=0)
+    for _ in range(30):
+        # 6 teams x 2 QBs = 12 rostered, 10 "starters": the 2 spares never start.
+        r = simulate_league(li, LINEUP, {**ROSTER, "QB": 2}, 6, fmt, 0.0, 2.0, rng, random_deal=True, qb_starters=10)
+        qb = li.pos[r.player] == "QB"
+        spare = qb & (li.talent[r.player] < np.sort(li.talent[r.player][qb])[2])
+        assert (r.started[spare] == 0).all()
