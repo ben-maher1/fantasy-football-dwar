@@ -20,6 +20,9 @@ starter_survival: []     # tested OFF (validate/starter.py, 2026-11-13): surviva
 starter_games: [QB]      # last season's share of full games (15+ plays) and share x talent in games played (validate/starter.py: better 2013-22 and 2023-25; ben, 2026-11-13: backups should play few games)
 with_without: true       # value = lineup points a typical team loses without him, his spot refilled from waivers (bench covers byes/injuries first). ben, 2026-11-14: adopted on all tabs
 full_games: [QB]         # QB value counts full games (15+ plays) from their own games model, so a backup's cameo appearances are not valued as starts (validate/starter.py full-games scores; 2026-11-13)
+play_by_rank: 6          # rostered players play by depth rank (backups less), from next-season games of players ranked by last-season PPG, 6 recent seasons (ben, 2026-11-20; reports/title_value). 0 = one rate per position
+qb_starters: 32          # >0: rostered QBs ranked 1..N are NFL starters (benched ones swapped out), playing at the top-12 rate; others never; no waiver QB (ben, 2026-11-21; adopted)
+random_deal: true        # true: with-and-without rosters dealt at random each simulated week (a stud's team is no likelier to hold weak backups), not a snake (ben, 2026-11-21; adopted)
 late_pick: {}             # OFF (ben, 2026-11-10): round-3+ scaling cut productive late-round stars too hard; smoother fades no clearer win (reports/late_pick). Was RB: {min_round: 3, max_career_year: 3, min_ppg: 8, min_games: 8, factors: [1.0, 0.85, 0.80]}
 survival_first_season: 1999  # survival trained on points per game since 1999, not fitted talent (2013+ for RB/WR): too few old players otherwise (validate/survival.py, 2026-11-10)
 injury_history: true     # weeks missed to injury in the last two seasons + current injury status (injury step)

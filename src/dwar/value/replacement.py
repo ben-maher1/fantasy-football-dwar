@@ -108,9 +108,39 @@ def _best_lineup(avail: dict[str, np.ndarray], talent: dict[str, np.ndarray], li
     return start
 
 
+def _deal(pools: dict[str, np.ndarray], teams: int, rostered: dict[str, int],
+          rng: np.random.Generator | None = None) -> list[dict[str, np.ndarray]]:
+    """Each team's league ranks per position (best first). A snake within
+    the position, or with `rng` a random deal (ben, 2026-11-21: in dynasty a
+    stud's team is no likelier to hold weak backups): `rostered[p]` per team,
+    who goes where at random."""
+    roster: list[dict[str, np.ndarray]] = [{} for _ in range(teams)]
+    for p, t in pools.items():
+        n = len(t)
+        if rng is None:
+            team_of = np.array([(r % teams) if (r // teams) % 2 == 0 else teams - 1 - (r % teams) for r in range(n)])
+        else:
+            team_of = rng.permutation(np.arange(n) % teams)
+        for k in range(teams):
+            roster[k][p] = np.flatnonzero(team_of == k)
+    return roster
+
+
+def _rate(p_play: dict[str, float | np.ndarray], p: str, ranks: np.ndarray) -> float | np.ndarray:
+    """Play chance for players at league `ranks` (best = 0): one rate per
+    position, or one per depth rank (dwar.play_rate_by_rank); ranks past
+    the end take the last rate."""
+    v = p_play.get(p, 1.0)
+    if np.ndim(v) == 0:
+        return float(v)
+    v = np.asarray(v)
+    return v[np.minimum(ranks, len(v) - 1)]
+
+
 def start_share(
     talent: dict[str, np.ndarray], lineup: dict[str, int], teams: int, rostered: dict[str, int],
-    p_play: dict[str, float], rng: np.random.Generator, weeks: int = 2000,
+    p_play: dict[str, float | np.ndarray], rng: np.random.Generator, weeks: int = 2000,
+    random_deal: bool = False,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """How often a rostered player is in his team's lineup in a week he plays.
 
@@ -120,23 +150,21 @@ def start_share(
     and each team starts its best available lineup. Returns, per position,
     (talent ascending, share) to interpolate any player's share from his
     talent."""
-    roster: list[dict[str, np.ndarray]] = [{} for _ in range(teams)]
     pools = {}
     for p, n in rostered.items():
         if p not in talent or n == 0:
             continue
-        t = np.sort(np.asarray(talent[p]))[::-1][: teams * n]
-        pools[p] = t
-        team_of = np.array([(r % teams) if (r // teams) % 2 == 0 else teams - 1 - (r % teams) for r in range(len(t))])
-        for k in range(teams):
-            roster[k][p] = np.flatnonzero(team_of == k)  # league ranks, best first
+        pools[p] = np.sort(np.asarray(talent[p]))[::-1][: teams * n]
+    roster = _deal(pools, teams, rostered)
     starts = {p: np.zeros(len(t)) for p, t in pools.items()}
     plays = {p: np.zeros(len(t)) for p, t in pools.items()}
     for _ in range(weeks):
+        if random_deal:
+            roster = _deal(pools, teams, rostered, rng)
         for k in range(teams):
             ranks = roster[k]
             tal = {p: pools[p][r] for p, r in ranks.items()}
-            avail = {p: rng.random(len(r)) < p_play.get(p, 1.0) for p, r in ranks.items()}
+            avail = {p: rng.random(len(r)) < _rate(p_play, p, r) for p, r in ranks.items()}
             st = _best_lineup(avail, tal, lineup)
             for p, r in ranks.items():
                 plays[p][r] += avail[p]
@@ -151,7 +179,8 @@ def start_share(
 
 def marginal_points(
     talent: dict[str, np.ndarray], lineup: dict[str, int], teams: int, rostered: dict[str, int],
-    p_play: dict[str, float], waiver: dict[str, float], rng: np.random.Generator, weeks: int = 1000,
+    p_play: dict[str, float | np.ndarray], waiver: dict[str, float], rng: np.random.Generator, weeks: int = 1000,
+    random_deal: bool = False,
 ) -> dict[str, tuple[np.ndarray, np.ndarray]]:
     """With-and-without value (ben, 2026-11-14): for each rostered player,
     the lineup points his team loses in a week he plays if he is gone, his
@@ -161,16 +190,12 @@ def marginal_points(
     can match loses a lot. Rosters are dealt and weeks drawn as in
     `start_share`. Returns, per position, (talent ascending, mean loss per
     week played)."""
-    roster: list[dict[str, np.ndarray]] = [{} for _ in range(teams)]
     pools = {}
     for p, n in rostered.items():
         if p not in talent or n == 0:
             continue
-        t = np.sort(np.asarray(talent[p]))[::-1][: teams * n]
-        pools[p] = t
-        team_of = np.array([(r % teams) if (r // teams) % 2 == 0 else teams - 1 - (r % teams) for r in range(len(t))])
-        for k in range(teams):
-            roster[k][p] = np.flatnonzero(team_of == k)
+        pools[p] = np.sort(np.asarray(talent[p]))[::-1][: teams * n]
+    roster = _deal(pools, teams, rostered)
     loss = {p: np.zeros(len(t)) for p, t in pools.items()}
     plays = {p: np.zeros(len(t)) for p, t in pools.items()}
 
@@ -179,10 +204,12 @@ def marginal_points(
         return float(sum(tal[p][st[p]].sum() for p in tal))
 
     for _ in range(weeks):
+        if random_deal:
+            roster = _deal(pools, teams, rostered, rng)
         for k in range(teams):
             ranks = roster[k]
             tal = {p: pools[p][r] for p, r in ranks.items()}
-            avail = {p: rng.random(len(r)) < p_play.get(p, 1.0) for p, r in ranks.items()}
+            avail = {p: rng.random(len(r)) < _rate(p_play, p, r) for p, r in ranks.items()}
             st = _best_lineup(avail, tal, lineup)
             base = float(sum(tal[p][st[p]].sum() for p in tal))
             for p, r in ranks.items():

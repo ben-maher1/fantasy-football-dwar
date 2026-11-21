@@ -243,6 +243,9 @@ class ValueConfig(_Frozen):
     starter_games: tuple[str, ...] = ()      # ... and games model
     with_without: bool = False               # roster formats: value = lineup points a typical team loses without him (test, 2026-11-14)
     full_games: tuple[str, ...] = ()         # positions valued on full games (own model), not games played x short chance
+    play_by_rank: int = 0                    # >0: rostered players' weekly play chance by depth rank, from this many recent seasons (ben, 2026-11-20); 0 = one rate per position
+    qb_starters: int = 0                     # >0: the best this many rostered QBs are NFL starters (managers swap out benched QBs), all at the top-12 play rate; the rest never play; no waiver QB, an empty QB slot scores 0 (ben, 2026-11-21). 0 = off
+    random_deal: bool = False                # with-and-without rosters dealt at random each simulated week, not a snake within each position (ben, 2026-11-21)
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
     picks: Picks | None = None               # rookie draft pick values (value/picks.py); None = not valued

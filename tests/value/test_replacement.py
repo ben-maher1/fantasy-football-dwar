@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from dwar.value.replacement import replacement_level, starters_used
+from dwar.value.replacement import marginal_points, replacement_level, starters_used
 
 PLAYERS = {
     "QB": [20, 18, 15, 10, 8],
@@ -112,3 +112,28 @@ def test_marginal_points_small_when_bench_is_close():
     assert np.isclose(loss[20.0], 10.5) and np.isclose(loss[19.5], 9.5)
     assert loss[10.0] == 0.0 and loss[9.5] == 0.0   # benched every week
     assert marginal_at(g["WR"], np.array([25.0]))[0] >= marginal_at(g["WR"], np.array([20.0]))[0] + 5 - 1e-9
+
+
+def test_random_deal_counts_and_mixing():
+    from dwar.value.replacement import _deal
+
+    pools = {"QB": np.arange(36.0)[::-1], "WR": np.arange(120.0)[::-1]}
+    rng = np.random.default_rng(0)
+    seen_two_top = False
+    for _ in range(50):
+        roster = _deal(pools, 12, {"QB": 3, "WR": 10}, rng)
+        assert all(len(t["QB"]) == 3 and len(t["WR"]) == 10 for t in roster)
+        assert sorted(np.concatenate([t["QB"] for t in roster])) == list(range(36))
+        seen_two_top |= any((t["QB"] < 12).sum() >= 2 for t in roster)
+    assert seen_two_top                     # some teams hold two top-12 QBs
+    snake = _deal(pools, 12, {"QB": 3}, None)
+    assert all((t["QB"] < 12).sum() == 1 for t in snake)
+
+
+def test_random_deal_lowers_stud_loss_vs_snake():
+    # Snake: the best QB's team holds the worst backup, so he loses the most.
+    talent = {"QB": np.linspace(24, 14, 36)}
+    args = ({"QB": 1}, 12, {"QB": 3}, {"QB": 1.0}, {"QB": 0.0})
+    snake = marginal_points(talent, *args, np.random.default_rng(1), weeks=200)
+    rand = marginal_points(talent, *args, np.random.default_rng(1), weeks=200, random_deal=True)
+    assert rand["QB"][1][-1] < snake["QB"][1][-1]
