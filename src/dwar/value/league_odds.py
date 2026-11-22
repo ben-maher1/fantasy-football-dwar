@@ -45,16 +45,18 @@ from dwar.features.player_tables import build_player_tables
 from dwar.features.situation import SituationRaw, model_covariates, prepare
 from dwar.ingest import sleeper as S
 from dwar.model.fit import load_fit, position_data
-from dwar.model.talent import for_position
+from dwar.model.talent import for_position, simulate_weeks
 from dwar.pipeline import output_dir
 from dwar.value.dwar import position_values, season_clock, value_inputs
 from dwar.value.title import (
     LeagueInputs,
     SeasonFormat,
+    availability,
+    bracket,
+    center_for,
+    lineup_scores,
     playoffs,
     round_robin,
-    seeds,
-    team_scores,
 )
 
 log = logging.getLogger(__name__)
@@ -210,77 +212,200 @@ def _inputs(ctx: Context, d: int, j: int, extra: tuple[np.ndarray, np.ndarray, n
                         params=params, likelihood=ctx.likelihood, known=kn)
 
 
+@dataclass(frozen=True)
+class Asset:
+    """A with-and-without question: `team`'s title odds with and without
+    `ref` ("remove" one of his own, or "add" one from another team)."""
+
+    kind: str      # "player" or "pick"
+    ref: int       # context player index, or index into LeagueSetup.picks
+    team: int      # whose odds
+    mode: str      # "remove" or "add"
+
+
+def assets_for(lg: LeagueSetup, me: int) -> list[Asset]:
+    """Every rostered player and owned pick, removed from its owner; and
+    every one owned by another team, added to `me`."""
+    out = [Asset("player", int(i), int(lg.roster[i]), "remove") for i in np.flatnonzero(lg.roster >= 0)]
+    out += [Asset("pick", k, owner, "remove") for k, (_, _, _, owner) in enumerate(lg.picks)]
+    out += [Asset("player", int(i), me, "add") for i in np.flatnonzero((lg.roster >= 0) & (lg.roster != me))]
+    out += [Asset("pick", k, me, "add") for k, (_, _, _, owner) in enumerate(lg.picks) if owner != me]
+    return out
+
+
+def drop_for(ctx: Context, lg: LeagueSetup, me: int) -> int:
+    """The player `me` would cut to make room for an added one: the
+    lowest projected points over the horizon (posterior mean)."""
+    mine = np.flatnonzero(lg.roster == me)
+    proj = (ctx.talent.mean(0) * ctx.share.mean(0)).sum(1)
+    return int(mine[np.argmin(proj[mine])])
+
+
+def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], weeks: int,
+            rng: np.random.Generator, cfs: dict[int, list[tuple[str, int]]], drop: dict[int, int]
+            ) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    """Weekly lineup points (T, weeks) for fixed rosters, and for each team
+    k in `cfs` its points (C_k, weeks) under each counterfactual: ("remove",
+    i) takes pool player i off, ("add", i) adds him (cutting `drop[k]`).
+    Every version sees the same weeks, so luck cancels."""
+    rost = np.flatnonzero(team >= 0)
+    loc = np.full(len(team), -1)
+    loc[rost] = np.arange(len(rost))
+    pos_r = li.pos[rost]
+    avail = availability(li.share[rost], weeks, OUT_RUN_WEEKS, rng)
+    pts = np.zeros((len(rost), weeks))
+    for p in lineup:
+        sel = pos_r == p
+        if sel.any():
+            c = center_for(li.likelihood[p], li.talent[rost][sel], li.params[p])
+            pts[sel] = simulate_weeks(li.likelihood[p], np.repeat(c[:, None], weeks, 1), li.params[p], rng)
+    key_r = np.where(avail, li.known[rost][:, None], -np.inf)
+    wpos = np.array([p for p, n in NO_QB_WAIVER.items() for _ in range(n) if p in li.params], object)
+    wc = {p: center_for(li.likelihood[p], np.array([li.waiver[p]]), li.params[p])[0] for p in set(wpos)}
+    wkey = np.array([[li.waiver[p]] * weeks for p in wpos], float).reshape(len(wpos), weeks)
+    extra_pos = np.array([p for p in ("QB", "RB", "WR", "TE")], object)
+    base = np.zeros((T, weeks))
+    out: dict[int, np.ndarray] = {}
+    team_r = team[rost]
+    for k in range(T):
+        mine = np.flatnonzero(team_r == k)
+        wpts = np.stack([simulate_weeks(li.likelihood[p], np.full(weeks, wc[p]), li.params[p], rng) for p in wpos]) \
+            if len(wpos) else np.zeros((0, weeks))
+        key = np.concatenate([key_r[mine], wkey], 0)            # (S, W)
+        pk = np.concatenate([pts[mine], wpts], 0)
+        spos = np.concatenate([pos_r[mine], wpos])
+        base[k] = lineup_scores(key.T, pk.T, spos, lineup)
+        todo = cfs.get(k)
+        if not todo:
+            continue
+        slot = {int(r): j for j, r in enumerate(mine)}          # rost index -> slot
+        C, S_ = len(todo), len(spos)
+        K = np.broadcast_to(np.concatenate([key, np.full((4, weeks), -np.inf)], 0), (C, S_ + 4, weeks)).copy()
+        Pt = np.broadcast_to(np.concatenate([pk, np.zeros((4, weeks))], 0), (C, S_ + 4, weeks)).copy()
+        for c, (mode, i) in enumerate(todo):
+            r = loc[i] if i >= 0 else -1
+            if r < 0:
+                continue
+            if mode == "remove":
+                if r in slot:
+                    K[c, slot[r]] = -np.inf
+            else:
+                e = S_ + int(np.flatnonzero(extra_pos == pos_r[r])[0])
+                K[c, e], Pt[c, e] = key_r[r], pts[r]
+                dr = loc[drop[k]] if k in drop else -1
+                if dr in slot:
+                    K[c, slot[dr]] = -np.inf
+        out[k] = lineup_scores(K.transpose(0, 2, 1), Pt.transpose(0, 2, 1), np.concatenate([spos, extra_pos]), lineup)
+    return base, out
+
+
+def _champs(scores: np.ndarray, sched: np.ndarray, wins0: np.ndarray, pf0: np.ndarray, fmt: SeasonFormat) -> np.ndarray:
+    """Champion (...,) from (..., T, W) scores: `sched` (regular weeks, T)
+    opponents, banked wins and points added before seeding."""
+    W = sched.shape[0]
+    reg = scores[..., :W]
+    opp = np.take_along_axis(reg, np.broadcast_to(sched.T, reg.shape), axis=-2)
+    wins = wins0 + (reg > opp).sum(-1) + 0.5 * (reg == opp).sum(-1)
+    pf = pf0 + reg.sum(-1)
+    order = np.argsort(-(wins * 1e6 + pf), axis=-1, kind="stable")[..., : fmt.playoff_teams]
+    return bracket(scores, order, W, fmt.byes)
+
+
 def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.random.Generator,
-                  known: np.ndarray) -> np.ndarray:
+                  known: np.ndarray, assets: list[Asset] | None = None, drop: dict[int, int] | None = None
+                  ) -> tuple[np.ndarray, np.ndarray]:
     """One league path from this season on: (seasons, teams) final places
-    (0 = champion)."""
+    (0 = champion), and (seasons, assets) title changes (-1, 0, 1) for each
+    asset's team with versus without it."""
+    assets, drop = assets or [], drop or {}
     T = lg.teams
     places = np.zeros((seasons, T), int)
-    # This season: the weeks left, then the playoffs.
-    left = lg.schedule_left.shape[0]
-    pw = lg.fmt.playoff_weeks
-    li = _inputs(ctx, d, 0, None, known)
-    li = replace(li, share=np.where(lg.taxi, 0.0, li.share))
-    sc = team_scores(li, lg.roster, T, lg.lineup, left + pw, OUT_RUN_WEEKS, rng, NO_QB_WAIVER)
-    reg = sc[:, :left]
-    opp = np.take_along_axis(reg, lg.schedule_left.T, 0)
-    wins = lg.wins + (reg > opp).sum(1) + 0.5 * (reg == opp).sum(1)
-    pf = lg.points + reg.sum(1)
-    order = np.argsort(-(wins * 1e6 + pf), kind="stable")
-    fin = playoffs(order, sc[:, left:], lg.fmt.playoff_teams, lg.fmt.byes)
-    places[0, fin] = np.arange(T)
-    # Later seasons: rookies join from the picks each team owns.
+    delta = np.zeros((seasons, len(assets)), np.int8)
+    P = len(ctx.player_id)
+    pick_idx = np.full(len(lg.picks), -1)          # pool index of each pick's rookie, once drafted
     added_pos, added_tal, added_sh, added_team = [], [], [], []
-    for j in range(1, seasons):
+    fin = None
+    for j in range(seasons):
         year = ctx.season0 + j
-        if year in ctx.rookies:
+        if j and year in ctx.rookies:
             rank, rpos, rtal, rsh = ctx.rookies[year]
             slot_of = {t: int(np.flatnonzero(fin[::-1] == t)[0]) + 1 for t in range(T)}   # worst finish picks first
-            for (y, k, orig, owner) in lg.picks:
+            for q, (y, k, orig, owner) in enumerate(lg.picks):
                 if y != year:
                     continue
                 cand = np.flatnonzero(rank == (k - 1) * T + slot_of[orig])
                 if len(cand):
                     c = rng.choice(cand)
+                    pick_idx[q] = P + len(added_pos)
                     added_pos.append(rpos[c])
                     added_tal.append(rtal[d % rtal.shape[0], c])
                     added_sh.append(rsh[d % rsh.shape[0], c])
                     added_team.append(owner)
         extra = None
         if added_pos:
-            extra = (np.array(added_pos, object), np.array([t[j] for t in added_tal]), np.array([s[j] for s in added_sh]))
+            extra = (np.array(added_pos, object), np.array([t[j] for t in added_tal]), np.array([x[j] for x in added_sh]))
         li = _inputs(ctx, d, j, extra, known)
-        team = np.concatenate([lg.roster, np.array(added_team, int)]) if added_pos else lg.roster
-        fmt = lg.fmt
-        sc = team_scores(li, team, T, lg.lineup, fmt.weeks, OUT_RUN_WEEKS, rng, NO_QB_WAIVER)
-        sched = round_robin(T, fmt.weeks, rng)
-        order = seeds(sc, sched, fmt.regular_weeks)
-        fin = playoffs(order, sc[:, fmt.regular_weeks:], fmt.playoff_teams, fmt.byes)
+        team = np.concatenate([lg.roster, np.array(added_team, int)]) if added_pos else lg.roster.copy()
+        if j == 0:
+            li = replace(li, share=np.where(lg.taxi, 0.0, li.share))
+            reg_w, sched, w0, p0 = lg.schedule_left.shape[0], lg.schedule_left, lg.wins, lg.points
+        else:
+            reg_w = lg.fmt.regular_weeks
+            sched, w0, p0 = round_robin(T, reg_w, rng), np.zeros(T), np.zeros(T)
+        weeks = reg_w + lg.fmt.playoff_weeks
+        cfs: dict[int, list[tuple[str, int]]] = {}
+        where: dict[int, list[int]] = {}
+        for a, x in enumerate(assets):
+            i = x.ref if x.kind == "player" else int(pick_idx[x.ref])
+            if i < 0:
+                continue
+            cfs.setdefault(x.team, []).append((x.mode, i))
+            where.setdefault(x.team, []).append(a)
+        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop)
+        reg = base[:, :reg_w]
+        opp = np.take_along_axis(reg, sched.T, 0)
+        wins = w0 + (reg > opp).sum(1) + 0.5 * (reg == opp).sum(1)
+        pf = p0 + reg.sum(1)
+        order = np.argsort(-(wins * 1e6 + pf), kind="stable")
+        fin = playoffs(order, base[:, reg_w:], lg.fmt.playoff_teams, lg.fmt.byes)
         places[j, fin] = np.arange(T)
-    return places
+        for k, sc_k in cf.items():
+            S_ = np.broadcast_to(base, (len(sc_k), T, weeks)).copy()
+            S_[:, k] = sc_k
+            won = (_champs(S_, sched, w0, p0, lg.fmt) == k).astype(np.int8) - np.int8(fin[0] == k)
+            delta[j, where[k]] = np.where(where_mode(assets, where[k]) == "remove", -won, won)
+    return places, delta
+
+
+def where_mode(assets: list[Asset], idx: list[int]) -> np.ndarray:
+    return np.array([assets[a].mode for a in idx], object)
 
 
 _CTX: Context | None = None
 _LG: LeagueSetup | None = None
 _KNOWN: np.ndarray | None = None
+_ASSETS: list[Asset] = []
+_DROP: dict[int, int] = {}
 
 
-def _chunk(args: tuple[int, int, int, int]) -> np.ndarray:
+def _chunk(args: tuple[int, int, int, int]) -> tuple[np.ndarray, np.ndarray]:
     start, n, seasons, seed = args
     rng = np.random.default_rng([seed, start])
     D = _CTX.talent.shape[0]
-    return np.stack([simulate_path(_CTX, _LG, i % D, seasons, rng, _KNOWN) for i in range(start, start + n)])
+    res = [simulate_path(_CTX, _LG, i % D, seasons, rng, _KNOWN, _ASSETS, _DROP) for i in range(start, start + n)]
+    return np.stack([r[0] for r in res]).astype(np.int8), np.stack([r[1] for r in res])
 
 
 def run(ctx: Context, lg: LeagueSetup, n: int, seasons: int, seed: int = 2026, workers: int = 4,
-        chunk: int = 100) -> np.ndarray:
-    """(n, seasons, teams) final places."""
-    global _CTX, _LG, _KNOWN
-    _CTX, _LG, _KNOWN = ctx, lg, ctx.talent.mean(0)
+        chunk: int = 50, assets: list[Asset] | None = None, drop: dict[int, int] | None = None
+        ) -> tuple[np.ndarray, np.ndarray]:
+    """(n, seasons, teams) final places and (n, seasons, assets) title changes."""
+    global _CTX, _LG, _KNOWN, _ASSETS, _DROP
+    _CTX, _LG, _KNOWN, _ASSETS, _DROP = ctx, lg, ctx.talent.mean(0), assets or [], drop or {}
     jobs = [(s, min(chunk, n - s), seasons, seed) for s in range(0, n, chunk)]
     with mp.get_context("fork").Pool(workers) as p:
         parts = p.map(_chunk, jobs)
-    return np.concatenate(parts)
+    return np.concatenate([a for a, _ in parts]), np.concatenate([b for _, b in parts])
 
 
 def summarize(places: np.ndarray, lg: LeagueSetup, season0: int) -> pl.DataFrame:
@@ -297,6 +422,31 @@ def summarize(places: np.ndarray, lg: LeagueSetup, season0: int) -> pl.DataFrame
     return pl.DataFrame(rows)
 
 
+DISCOUNT = 0.80
+
+
+def asset_values(delta: np.ndarray, assets: list[Asset], ctx: Context, lg: LeagueSetup,
+                 discount: float = DISCOUNT) -> pl.DataFrame:
+    """Per asset: title-odds points by season and the discounted total
+    (this season weight 1), with its standard error over league paths."""
+    n, J, _ = delta.shape
+    w = discount ** np.arange(J)
+    tot = np.tensordot(delta.astype(np.float32), w.astype(np.float32), axes=([1], [0]))   # (n, A)
+    mean_j = delta.mean(0) * 100
+    rows = []
+    for a, x in enumerate(assets):
+        if x.kind == "player":
+            ident, pos, owner = ctx.player_id[x.ref], str(ctx.position[x.ref]), int(lg.roster[x.ref])
+        else:
+            y, k, orig, owner = lg.picks[x.ref]
+            ident, pos = f"{y} round {k} ({lg.owners[orig]})", "PICK"
+        rows.append({"kind": x.kind, "id": ident, "position": pos, "owner": lg.owners[owner],
+                     "for_team": lg.owners[x.team], "mode": x.mode,
+                     "value": float(tot[:, a].mean() * 100), "se": float(tot[:, a].std() * 100 / np.sqrt(n)),
+                     **{f"v{ctx.season0 + j}": float(mean_j[j, a]) for j in range(J)}})
+    return pl.DataFrame(rows)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--as-of", required=True, type=date.fromisoformat)
@@ -306,6 +456,8 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--seed", type=int, default=2026)
     ap.add_argument("--pull", action="store_true", help="fetch a fresh Sleeper snapshot first")
+    ap.add_argument("--me", default=None, help="Sleeper display name: also value other teams' assets to this team")
+    ap.add_argument("--no-values", action="store_true", help="title odds only")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     t0 = time.perf_counter()
@@ -321,16 +473,24 @@ def main() -> None:
                      load_raw("players"), S.rostered(sl)["sleeper_id"].to_list())
     lg = league_setup(sl, ctx, xw, dict(load_format(a.format).lineup))
     seasons = ctx.talent.shape[2]
-    places = run(ctx, lg, a.leagues, seasons, a.seed, a.workers)
+    assets, drop = [], {}
+    if not a.no_values:
+        me = lg.owners.index(a.me) if a.me else -1
+        assets = assets_for(lg, me) if me >= 0 else [x for x in assets_for(lg, 0) if x.mode == "remove"]
+        drop = {me: drop_for(ctx, lg, me)} if me >= 0 else {}
+    places, delta = run(ctx, lg, a.leagues, seasons, a.seed, a.workers, assets=assets, drop=drop)
     t2 = time.perf_counter()
     log.info("%d league paths x %d seasons in %.0fs", a.leagues, seasons, t2 - t1)
     out = output_dir(a.as_of, a.format) / f"league_{a.league}"
     out.mkdir(parents=True, exist_ok=True)
     summarize(places, lg, ctx.season0).write_parquet(out / "odds.parquet")
     np.save(out / "places.npy", places.astype(np.int8))
+    if assets:
+        asset_values(delta, assets, ctx, lg).write_parquet(out / "values.parquet")
     (out / "run.json").write_text(json.dumps({
         "as_of": a.as_of.isoformat(), "format": a.format, "league": a.league,
         "sleeper_pull": sl.pull_date.isoformat() if sl.pull_date else None, "leagues": a.leagues, "seed": a.seed,
+        "me": a.me, "assets": len(assets), "drop": ctx.player_id[drop[me]] if drop else None,
         "rostered_matched": int((lg.roster >= 0).sum()), "rostered_total": S.rostered(sl).height,
         "weeks_left": int(lg.schedule_left.shape[0]), "runtime_s": {"context": round(t1 - t0), "sim": round(t2 - t1)},
         "data_dir": str(data_dir()),

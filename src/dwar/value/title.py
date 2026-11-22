@@ -100,11 +100,16 @@ def champion(scores: np.ndarray, schedule: np.ndarray, fmt: SeasonFormat) -> np.
     to the top seeds; each round reseeds so the best seed left plays the
     worst; an exact tie goes to the better seed."""
     order = seeds(scores, schedule, fmt.regular_weeks)[..., : fmt.playoff_teams]   # (..., P) by seed
-    week = fmt.regular_weeks
+    return bracket(scores, order, fmt.regular_weeks, fmt.byes)
+
+
+def bracket(scores: np.ndarray, order: np.ndarray, week: int, byes: int) -> np.ndarray:
+    """Title winner (...,) of a playoff bracket: `order` (..., playoff teams)
+    by seed, first round played in week `week` of `scores` (..., teams, weeks)."""
     alive = order
     first = True
     while alive.shape[-1] > 1:
-        n_bye = fmt.byes if first else 0
+        n_bye = byes if first else 0
         bye, play = alive[..., :n_bye], alive[..., n_bye:]
         k = play.shape[-1] // 2
         hi, lo = play[..., :k], play[..., ::-1][..., :k]

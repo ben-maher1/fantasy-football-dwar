@@ -48,7 +48,24 @@ def test_taxi_cannot_start_this_season_and_traded_pick_joins_next():
     ctx = _ctx([5.0, 40.0, 10.0])
     lg = _setup(ctx)
     rng = np.random.default_rng(1)
-    paths = np.stack([O.simulate_path(ctx, lg, d % 4, 2, rng, ctx.talent.mean(0)) for d in range(60)])
+    paths = np.stack([O.simulate_path(ctx, lg, d % 4, 2, rng, ctx.talent.mean(0))[0] for d in range(60)])
     # This season team 2 is favoured (team 1 starts its 5-PPG QB); next season team 1's taxi QB plays.
     assert (paths[:, 0, 1] == 0).mean() > 0.6
     assert (paths[:, 1, 0] == 0).mean() > 0.9
+
+
+def test_with_and_without_values_share_the_same_weeks():
+    ctx = _ctx([15.0, 40.0, 20.0])
+    r, rp, rt, rs = ctx.rookies[2027]
+    ctx.rookies[2027] = (r, rp, np.full_like(rt, 1.0), rs)     # rookies who never start
+    lg = _setup(ctx)
+    assets = O.assets_for(lg, 0)
+    kinds = {(a.kind, a.ref, a.team, a.mode) for a in assets}
+    assert ("player", 2, 0, "add") in kinds and ("player", 1, 0, "remove") in kinds
+    assert ("pick", lg.picks.index((2027, 1, 1, 0)), 0, "remove") in kinds
+    rng = np.random.default_rng(3)
+    d = np.stack([O.simulate_path(ctx, lg, i % 4, 2, rng, ctx.talent.mean(0), assets, {0: 0})[1] for i in range(80)])
+    a_taxi = next(k for k, a in enumerate(assets) if (a.kind, a.ref, a.mode) == ("player", 1, "remove"))
+    assert (d[:, 0, a_taxi] == 0).all()          # a taxi player cannot change this season
+    assert d[:, 1, a_taxi].mean() > 0.3          # next season he is the team's QB
+    assert set(np.unique(d)) <= {-1, 0, 1}
