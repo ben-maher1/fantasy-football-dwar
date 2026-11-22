@@ -376,3 +376,64 @@ def title_curve(talent: np.ndarray, share: np.ndarray, delta: np.ndarray, n_tale
     v = np.maximum.accumulate(v, axis=0)
     v = np.maximum.accumulate(v, axis=1)
     return TitleCurve(tg, sg, v)
+
+
+# --- a real league (value/league_odds.py) ----------------------------------
+
+
+def team_scores(li: LeagueInputs, team: np.ndarray, teams: int, lineup: dict[str, int], weeks: int,
+                run_weeks: float | None, rng: np.random.Generator,
+                waiver_copies: dict[str, int] | None = None) -> np.ndarray:
+    """(teams, weeks) lineup points for fixed rosters (`team[i]` = team of
+    pool player i, -1 if not rostered). Each team also holds
+    `waiver_copies[p]` waiver players at the waiver level, always available
+    (none for a position not listed: an empty slot scores 0)."""
+    waiver_copies = WAIVER_COPIES if waiver_copies is None else waiver_copies
+    rostered = np.flatnonzero(team >= 0)
+    avail = availability(li.share[rostered], weeks, run_weeks, rng)
+    pts = np.zeros((len(rostered), weeks))
+    pos_r = li.pos[rostered]
+    for p in lineup:
+        sel = pos_r == p
+        if sel.any():
+            c = center_for(li.likelihood[p], li.talent[rostered][sel], li.params[p])
+            pts[sel] = simulate_weeks(li.likelihood[p], np.repeat(c[:, None], weeks, 1), li.params[p], rng)
+    seen = (li.talent if li.known is None else li.known)[rostered]
+    wpos = [p for p, n in waiver_copies.items() for _ in range(n) if p in li.params]
+    wc = {p: center_for(li.likelihood[p], np.array([li.waiver[p]]), li.params[p])[0] for p in set(wpos)}
+    out = np.zeros((teams, weeks))
+    for k in range(teams):
+        mine = np.flatnonzero(team[rostered] == k)
+        key = np.concatenate([np.where(avail[mine], seen[mine][:, None], -np.inf),
+                              np.full((len(wpos), weeks), [[li.waiver[p]] for p in wpos] or 0.0)], 0)
+        pk = np.concatenate([pts[mine]] + [simulate_weeks(li.likelihood[p], np.full((1, weeks), wc[p]), li.params[p], rng)
+                                           for p in wpos], 0) if wpos else pts[mine]
+        spos = np.concatenate([pos_r[mine], np.array(wpos, object)]) if wpos else pos_r[mine]
+        out[k] = lineup_scores(key.T, pk.T, spos, lineup)
+    return out
+
+
+def playoffs(seed_order: np.ndarray, scores: np.ndarray, playoff_teams: int, byes: int) -> np.ndarray:
+    """Final places for one season, best first: the bracket's champion,
+    runner-up, then teams by the round they went out in (better seed first),
+    then the teams that missed the playoffs in seed order. `seed_order`:
+    all teams by seed; `scores`: (teams, playoff weeks)."""
+    alive = list(seed_order[:playoff_teams])
+    out_by_round: list[list[int]] = []
+    first, week = True, 0
+    while len(alive) > 1:
+        n_bye = byes if first else 0
+        bye, play = alive[:n_bye], alive[n_bye:]
+        k = len(play) // 2
+        winners, losers = [], []
+        for i in range(k):
+            hi, lo = play[i], play[-1 - i]
+            (winners if scores[hi, week] >= scores[lo, week] else losers).append(hi)
+            (losers if scores[hi, week] >= scores[lo, week] else winners).append(lo)
+        seed_pos = {t: i for i, t in enumerate(seed_order)}
+        alive = sorted(bye + winners, key=seed_pos.get)
+        out_by_round.append(sorted(losers, key=seed_pos.get))
+        week += 1
+        first = False
+    places = alive + [t for r in reversed(out_by_round) for t in r]
+    return np.array(places + [t for t in seed_order if t not in places])

@@ -1,7 +1,8 @@
 """A Sleeper fantasy league, read from Sleeper's public API (api.sleeper.app).
 
 Read-only and keyless: the API serves league settings, rosters, users,
-weekly matchups and traded rookie picks for any league ID, plus one large
+weekly matchups (the schedule too: unplayed weeks come back paired with
+0 points) and traded rookie picks for any league ID, plus one large
 player list that Sleeper asks clients to fetch at most once a day. Nothing
 here writes to a league.
 
@@ -53,7 +54,7 @@ def _root(root: Path | None) -> Path:
 def pull(league_id: str, *, today: date | None = None, root: Path | None = None) -> Path:
     """Fetch a league (and today's player list, if not already saved) and
     write it as raw JSON. Returns the league's directory."""
-    today = today or date.today()
+    today = today or date.today()  # noqa: DTZ011 (the pull's own local date)
     day = _root(root) / today.isoformat()
     out = day / str(league_id)
     out.mkdir(parents=True, exist_ok=True)
@@ -62,8 +63,11 @@ def pull(league_id: str, *, today: date | None = None, root: Path | None = None)
     for name, path in zip(LEAGUE_FILES, ("", "/rosters", "/users", "/traded_picks"), strict=True):
         (out / f"{name}.json").write_text(json.dumps(_get(f"/league/{league_id}{path}")))
     league = json.loads((out / "league.json").read_text())
-    last = int(league.get("settings", {}).get("last_scored_leg") or 0)
-    for w in range(1, last + 1):
+    settings = league.get("settings", {})
+    last = int(settings.get("last_scored_leg") or 0)
+    # Unplayed regular-season weeks too: they carry the schedule (pairings, 0 points).
+    reg = max(int(settings.get("playoff_week_start") or 15) - 1, last)
+    for w in range(1, reg + 1):
         (out / f"matchups_{w}.json").write_text(json.dumps(_get(f"/league/{league_id}/matchups/{w}")))
     players = day / "players.json"
     if not players.exists():
@@ -95,7 +99,7 @@ def load(league_id: str, pull_date: date | None = None, root: Path | None = None
         raise FileNotFoundError(f"no saved Sleeper pull for league {league_id} under {base}: run pull() first")
     day = pull_date.isoformat() if pull_date else dates[-1]
     d = base / day / str(league_id)
-    read = lambda name: json.loads((d / f"{name}.json").read_text())  # noqa: E731
+    read = lambda name: json.loads((d / f"{name}.json").read_text())
     matchups = {int(p.stem.split("_")[1]): json.loads(p.read_text()) for p in d.glob("matchups_*.json")}
     players_file = base / day / "players.json"
     players = json.loads(players_file.read_text()) if players_file.exists() else {}
@@ -126,9 +130,13 @@ def standings(lg: League) -> pl.DataFrame:
 
 
 def weekly_results(lg: League) -> pl.DataFrame:
-    """Scored weeks: each team's points and its opponent (same matchup_id)."""
+    """Scored weeks: each team's points and its opponent (same matchup_id).
+    Saved weeks past `last_scored_leg` are schedule only and left out."""
+    last = int(lg.league.get("settings", {}).get("last_scored_leg") or max(lg.matchups, default=0))
     rows = []
     for w, games in sorted(lg.matchups.items()):
+        if w > last:
+            continue
         by_match: dict[int, list[dict]] = {}
         for g in games:
             if g.get("matchup_id") is not None:

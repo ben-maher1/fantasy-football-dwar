@@ -181,3 +181,28 @@ def test_qb_starters_spares_never_play_and_no_waiver_qb():
         qb = li.pos[r.player] == "QB"
         spare = qb & (li.talent[r.player] < np.sort(li.talent[r.player][qb])[2])
         assert (r.started[spare] == 0).all()
+
+
+def test_team_scores_strong_roster_scores_more_and_empty_qb_scores_zero():
+    from dwar.value.title import team_scores
+    li = _toy_league(30.0)
+    rng = np.random.default_rng(5)
+    team = np.full(len(li.pos), -1)
+    # Team 0: the best QB, RBs, WRs, TE; team 1: weak ones and no QB.
+    team[[13, 43, 42, 41, 83, 82, 81, 80, 97]] = 0
+    team[[14, 15, 16, 44, 45, 46, 47, 84, 85]] = 1
+    sc = team_scores(li, team, 2, LINEUP, 200, None, rng, {"QB": 0, "RB": 5, "WR": 5, "TE": 4})
+    assert sc.shape == (2, 200)
+    assert sc[0].mean() > sc[1].mean() + 20
+
+
+def test_playoffs_places_by_round_then_seed():
+    from dwar.value.title import playoffs
+    order = np.arange(12)[::-1]                    # team 11 is the 1 seed
+    sc = np.tile(np.arange(12, dtype=float)[:, None], (1, 3))   # higher team index always wins
+    assert playoffs(order, sc, 6, 2).tolist() == list(range(12))[::-1]
+    # Upsets: the 6 seed (team 6) wins every game.
+    sc[6] = 100.0
+    places = playoffs(order, sc, 6, 2)
+    assert places[0] == 6 and sorted(places.tolist()) == list(range(12))
+    assert places[6:].tolist() == [5, 4, 3, 2, 1, 0]     # non-playoff teams in seed order

@@ -1,0 +1,54 @@
+import numpy as np
+import polars as pl
+
+from dwar.ingest import sleeper as S
+from dwar.value import league_odds as O
+
+LEAGUE = {"season": "2026", "settings": {"draft_rounds": 1, "last_scored_leg": 1, "playoff_week_start": 4,
+                                         "playoff_teams": 2}}
+ROSTERS = [
+    {"roster_id": 1, "owner_id": "u1", "players": ["a", "b"], "taxi": ["b"], "settings": {"wins": 1, "fpts": 120}},
+    {"roster_id": 2, "owner_id": "u2", "players": ["c"], "settings": {"losses": 1, "fpts": 100}},
+]
+USERS = [{"user_id": "u1", "display_name": "ben"}, {"user_id": "u2", "display_name": "rival"}]
+SCHED = [{"roster_id": 1, "matchup_id": 1, "points": 0.0}, {"roster_id": 2, "matchup_id": 1, "points": 0.0}]
+MATCHUPS = {1: [{"roster_id": 1, "matchup_id": 1, "points": 120.0}, {"roster_id": 2, "matchup_id": 1, "points": 100.0}],
+            2: SCHED, 3: SCHED}
+TRADED = [{"season": "2027", "round": 1, "roster_id": 2, "owner_id": 1, "previous_owner_id": 2}]
+
+
+def _ctx(qb_talent: list[float]) -> O.Context:
+    D, J = 4, 2
+    tal = np.broadcast_to(np.array(qb_talent)[None, :, None], (D, 3, J)).copy()
+    rank = np.array([1, 2])
+    rookies = {2027: (rank, np.array(["QB", "QB"], object), np.full((D, 2, J), 50.0), np.ones((D, 2, J)))}
+    hurdle = {"sigma": 0.5, "nu": 30.0, "h0": 1.5, "h1": 1.0, "zero_value": 0.0}
+    return O.Context(season0=2026, player_id=["ga", "gb", "gc"], position=np.array(["QB"] * 3, object),
+                     talent=tal, share=np.ones((D, 3, J)), rookies=rookies, waiver={"QB": 0.0},
+                     params={"QB": hurdle}, likelihood={"QB": "sqrt_hurdle"})
+
+
+def _setup(ctx):
+    lg = S.League(LEAGUE, ROSTERS, USERS, TRADED, MATCHUPS, {})
+    xw = pl.DataFrame({"sleeper_id": ["a", "b", "c"], "gsis_id": ["ga", "gb", "gc"]})
+    return O.league_setup(lg, ctx, xw, {"QB": 1})
+
+
+def test_league_setup_reads_rosters_schedule_and_picks():
+    ctx = _ctx([20.0, 40.0, 10.0])
+    lg = _setup(ctx)
+    assert lg.roster.tolist() == [0, 0, 1] and lg.taxi.tolist() == [False, True, False]
+    assert lg.schedule_left.tolist() == [[1, 0], [1, 0]]
+    assert lg.wins.tolist() == [1.0, 0.0] and lg.points.tolist() == [120.0, 100.0]
+    assert (2027, 1, 1, 0) in lg.picks           # team 2's 2027 1st now belongs to team 1
+
+
+def test_taxi_cannot_start_this_season_and_traded_pick_joins_next():
+    # Team 1's starter is weak this year (its 40-PPG QB is on taxi), team 2's 10-PPG QB starts.
+    ctx = _ctx([5.0, 40.0, 10.0])
+    lg = _setup(ctx)
+    rng = np.random.default_rng(1)
+    paths = np.stack([O.simulate_path(ctx, lg, d % 4, 2, rng, ctx.talent.mean(0)) for d in range(60)])
+    # This season team 2 is favoured (team 1 starts its 5-PPG QB); next season team 1's taxi QB plays.
+    assert (paths[:, 0, 1] == 0).mean() > 0.6
+    assert (paths[:, 1, 0] == 0).mean() > 0.9

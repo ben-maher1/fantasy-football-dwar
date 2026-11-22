@@ -84,3 +84,10 @@ def test_load_reads_a_saved_pull(tmp_path):
     lg = S.load("L1", root=tmp_path)
     assert lg.season == 2026 and lg.pull_date.isoformat() == "2026-11-22"
     assert set(lg.matchups) == {1} and lg.players["10"]["team"] == "BUF"
+
+
+def test_weekly_results_skip_unplayed_schedule_weeks():
+    m = {**MATCHUPS, 3: [{"roster_id": 1, "matchup_id": 1, "points": 0.0},
+                         {"roster_id": 2, "matchup_id": 1, "points": 0.0}]}
+    lg = S.League(LEAGUE, ROSTERS, USERS, TRADED, m, PLAYERS)
+    assert S.weekly_results(lg)["week"].max() == 2
