@@ -9,3 +9,8 @@ players:
     season: 2026
     known_on: 2026-11-07   # reported by ben
     note: season-ending injury; on IR since week 1
+  - player_id: "00-0039040"
+    name: De'Von Achane
+    season: 2026
+    known_on: 2026-11-23   # reported by ben
+    note: season-ending injury (reported by ben)
