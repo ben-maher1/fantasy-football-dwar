@@ -220,7 +220,8 @@ class Asset:
     kind: str      # "player" or "pick"
     ref: int       # context player index, or index into LeagueSetup.picks
     team: int      # whose odds
-    mode: str      # "remove" or "add"
+    mode: str      # "remove", "add" or "trade"
+    parts: tuple = ()   # for a trade: ((kind, ref, "remove" | "add"), ...) all for `team`
 
 
 def assets_for(lg: LeagueSetup, me: int) -> list[Asset]:
@@ -242,7 +243,7 @@ def drop_for(ctx: Context, lg: LeagueSetup, me: int) -> int:
 
 
 def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], weeks: int,
-            rng: np.random.Generator, cfs: dict[int, list[tuple[str, int]]], drop: dict[int, int]
+            rng: np.random.Generator, cfs: dict[int, list[tuple]], drop: dict[int, int]
             ) -> tuple[np.ndarray, dict[int, np.ndarray]]:
     """Weekly lineup points (T, weeks) for fixed rosters, and for each team
     k in `cfs` its points (C_k, weeks) under each counterfactual: ("remove",
@@ -263,7 +264,7 @@ def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], 
     wpos = np.array([p for p, n in NO_QB_WAIVER.items() for _ in range(n) if p in li.params], object)
     wc = {p: center_for(li.likelihood[p], np.array([li.waiver[p]]), li.params[p])[0] for p in set(wpos)}
     wkey = np.array([[li.waiver[p]] * weeks for p in wpos], float).reshape(len(wpos), weeks)
-    extra_pos = np.array([p for p in ("QB", "RB", "WR", "TE")], object)
+    extra_pos = np.array([p for p in ("QB", "RB", "WR", "TE") for _ in range(4)], object)   # room for 4 adds each
     base = np.zeros((T, weeks))
     out: dict[int, np.ndarray] = {}
     team_r = team[rost]
@@ -280,21 +281,27 @@ def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], 
             continue
         slot = {int(r): j for j, r in enumerate(mine)}          # rost index -> slot
         C, S_ = len(todo), len(spos)
-        K = np.broadcast_to(np.concatenate([key, np.full((4, weeks), -np.inf)], 0), (C, S_ + 4, weeks)).copy()
-        Pt = np.broadcast_to(np.concatenate([pk, np.zeros((4, weeks))], 0), (C, S_ + 4, weeks)).copy()
+        E = len(extra_pos)
+        K = np.broadcast_to(np.concatenate([key, np.full((E, weeks), -np.inf)], 0), (C, S_ + E, weeks)).copy()
+        Pt = np.broadcast_to(np.concatenate([pk, np.zeros((E, weeks))], 0), (C, S_ + E, weeks)).copy()
         for c, (mode, i) in enumerate(todo):
-            r = loc[i] if i >= 0 else -1
-            if r < 0:
-                continue
-            if mode == "remove":
-                if r in slot:
-                    K[c, slot[r]] = -np.inf
-            else:
-                e = S_ + int(np.flatnonzero(extra_pos == pos_r[r])[0])
-                K[c, e], Pt[c, e] = key_r[r], pts[r]
-                dr = loc[drop[k]] if k in drop else -1
-                if dr in slot:
-                    K[c, slot[dr]] = -np.inf
+            moves = list(i) if mode == "trade" else [(mode, i)]
+            used: dict[str, int] = {}
+            for m, j in moves:
+                r = loc[j] if j >= 0 else -1
+                if r < 0:
+                    continue
+                if m == "remove":
+                    if r in slot:
+                        K[c, slot[r]] = -np.inf
+                else:
+                    p = pos_r[r]
+                    e = S_ + int(np.flatnonzero(extra_pos == p)[used.get(p, 0)])
+                    used[p] = used.get(p, 0) + 1
+                    K[c, e], Pt[c, e] = key_r[r], pts[r]
+                    dr = loc[drop[k]] if (k in drop and mode != "trade") else -1
+                    if dr in slot:
+                        K[c, slot[dr]] = -np.inf
         out[k] = lineup_scores(K.transpose(0, 2, 1), Pt.transpose(0, 2, 1), np.concatenate([spos, extra_pos]), lineup)
     return base, out
 
@@ -353,9 +360,17 @@ def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.r
             reg_w = lg.fmt.regular_weeks
             sched, w0, p0 = round_robin(T, reg_w, rng), np.zeros(T), np.zeros(T)
         weeks = reg_w + lg.fmt.playoff_weeks
-        cfs: dict[int, list[tuple[str, int]]] = {}
+        cfs: dict[int, list[tuple]] = {}
         where: dict[int, list[int]] = {}
         for a, x in enumerate(assets):
+            if x.mode == "trade":
+                moves = tuple((m, r if kd == "player" else int(pick_idx[r])) for kd, r, m in x.parts)
+                moves = tuple(mv for mv in moves if mv[1] >= 0)
+                if not moves:
+                    continue
+                cfs.setdefault(x.team, []).append(("trade", moves))
+                where.setdefault(x.team, []).append(a)
+                continue
             i = x.ref if x.kind == "player" else int(pick_idx[x.ref])
             if i < 0:
                 continue
@@ -435,7 +450,9 @@ def asset_values(delta: np.ndarray, assets: list[Asset], ctx: Context, lg: Leagu
     mean_j = delta.mean(0) * 100
     rows = []
     for a, x in enumerate(assets):
-        if x.kind == "player":
+        if x.kind == "trade":
+            ident, pos, owner = f"trade {x.ref}", "TRADE", x.team
+        elif x.kind == "player":
             ident, pos, owner = ctx.player_id[x.ref], str(ctx.position[x.ref]), int(lg.roster[x.ref])
         else:
             y, k, orig, owner = lg.picks[x.ref]

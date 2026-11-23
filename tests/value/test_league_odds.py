@@ -69,3 +69,16 @@ def test_with_and_without_values_share_the_same_weeks():
     assert (d[:, 0, a_taxi] == 0).all()          # a taxi player cannot change this season
     assert d[:, 1, a_taxi].mean() > 0.3          # next season he is the team's QB
     assert set(np.unique(d)) <= {-1, 0, 1}
+
+
+def test_a_trade_is_one_counterfactual():
+    ctx = _ctx([15.0, 40.0, 20.0])
+    r, rp, rt, rs = ctx.rookies[2027]
+    ctx.rookies[2027] = (r, rp, np.full_like(rt, 1.0), rs)
+    lg = _setup(ctx)
+    # Team 0 sends its starter (QB 0) for team 1's QB 2: next season (taxi QB 1 plays) nothing changes for it.
+    swap = O.Asset("trade", 0, 0, "trade", (("player", 0, "remove"), ("player", 2, "add")))
+    same = O.Asset("trade", 1, 0, "trade", (("player", 0, "remove"), ("player", 0, "add")))
+    rng = np.random.default_rng(5)
+    d = np.stack([O.simulate_path(ctx, lg, i % 4, 2, rng, ctx.talent.mean(0), [swap, same])[1] for i in range(60)])
+    assert d[:, 0, 0].mean() >= 0 and (d[:, :, 1] == 0).all()
