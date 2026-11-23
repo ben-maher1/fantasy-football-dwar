@@ -33,3 +33,8 @@ picks:                   # rookie draft pick values (value/picks.py; plan approv
   prior_shape: true      # bend the rookie prior's log-pick line to the fit's own rookies: it overrated top-8 NFL picks, underrated picks 17-100 (2026-11-15)
   games_talent_corr: {QB: 0.30, RB: 0.30, WR: 0.33, TE: 0.20}  # rookie-year games go more to the better draws (corr. of fit talent and games given pick, 2013-24 rookies)
   talent_scale: {RB: 1.17}  # ben, 2026-11-15: one RB factor so 2013-21 classes' 5-season points match real (1.175; 1.13-1.22 leaving each class out). Hot-start RBs win playing time, which the model doesn't count
+matchups:                # league title-odds sim only (value/league_odds.py), rest of the current season; DWAR unchanged (ben, 2026-11-23)
+  byes: true             # NFL bye weeks are weeks out
+  effects:               # weekly expected points x (1 + dvp * opponent rating + home * +-0.5); learned 2013-19, passed on 2020-25 weeks
+    QB: {dvp: 0.349, home: 0.055}   # log score +0.011 +- 0.004 a week
+    RB: {dvp: 0.510, home: 0.068}   # fantasy starters +0.007 +- 0.003 (all RBs a tie); WR, TE tie: left out

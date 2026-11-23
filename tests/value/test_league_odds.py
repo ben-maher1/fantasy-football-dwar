@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import polars as pl
 
@@ -82,3 +84,15 @@ def test_a_trade_is_one_counterfactual():
     rng = np.random.default_rng(5)
     d = np.stack([O.simulate_path(ctx, lg, i % 4, 2, rng, ctx.talent.mean(0), [swap, same])[1] for i in range(60)])
     assert d[:, 0, 0].mean() >= 0 and (d[:, :, 1] == 0).all()
+
+
+def test_a_bye_every_week_takes_the_player_out():
+    # Team 0's starter (QB 0, 30 PPG) is on a bye every week left: team 0 plays nobody and loses.
+    ctx = _ctx([30.0, 40.0, 10.0])
+    lg = _setup(ctx)
+    weeks = range(lg.first_week, lg.first_week + 6)
+    off = replace(ctx, week_mult={w: np.array([0.0, 1.0, 1.0]) for w in weeks})
+    rng = np.random.default_rng(2)
+    on = np.stack([O.simulate_path(ctx, lg, d % 4, 1, rng, ctx.talent.mean(0))[0] for d in range(60)])
+    out = np.stack([O.simulate_path(off, lg, d % 4, 1, rng, ctx.talent.mean(0))[0] for d in range(60)])
+    assert (on[:, 0, 0] == 0).mean() > 0.6 and (out[:, 0, 0] == 0).mean() < 0.1

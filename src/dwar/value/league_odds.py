@@ -48,6 +48,7 @@ from dwar.model.fit import load_fit, position_data
 from dwar.model.talent import for_position, simulate_weeks
 from dwar.pipeline import output_dir
 from dwar.value.dwar import position_values, season_clock, value_inputs
+from dwar.value import matchups as M
 from dwar.value.title import (
     LeagueInputs,
     SeasonFormat,
@@ -78,6 +79,9 @@ class Context:
     waiver: dict[str, float]
     params: dict[str, dict[str, np.ndarray]]
     likelihood: dict[str, str]
+    # NFL week -> (P,) factor on expected points this season (value/matchups.py): matchup, 0 on a bye.
+    # None (or a missing week) = every week alike.
+    week_mult: dict[int, np.ndarray] | None = None
 
 
 def build_context(as_of: date, format_name: str) -> Context:
@@ -131,7 +135,12 @@ def build_context(as_of: date, format_name: str) -> Context:
     for year, (rank, rpos, tr) in traces.items():
         full = np.where(rpos[None, :, None] == "QB", tr.full, 1.0)
         rookies[year] = (rank, rpos, tr.talent[:D], (np.clip(tr.games * full / G, 0, 1) * tr.alive)[:D])
+    week_mult = None
+    if cfg.matchups is not None:
+        week_mult = matchup_weeks(tables.player_weeks, snap.schedules, inputs.clock.current,
+                                  [ids[i] for i in keep], list(np.array(pos, object)[keep]), cfg.matchups)
     return Context(
+        week_mult=week_mult,
         season0=inputs.clock.current, player_id=[ids[i] for i in keep], position=np.array(pos, object)[keep],
         talent=talent[:, keep], share=share[:, keep], rookies=rookies,
         waiver={p: float(np.mean(v)) for p, v in inputs.replacement.items()},
@@ -139,6 +148,24 @@ def build_context(as_of: date, format_name: str) -> Context:
                 for p, d in inputs.draws.items()},
         likelihood={p: for_position(model_cfg.likelihoods(), p) for p in inputs.draws},
     )
+
+
+def matchup_weeks(player_weeks: pl.DataFrame, schedules: pl.DataFrame, season: int, ids: list[str],
+                  positions: list[str], settings) -> dict[int, np.ndarray]:
+    """NFL week -> (players,) matchup/bye factor for every regular-season
+    week of `season`, from the games in `player_weeks` (as-of filtered)."""
+    pw = player_weeks.filter(pl.col("season") >= season - 3).select(
+        "player_id", "position", "season", "week", "game_id", "team", "opponent_team", "fpts")
+    hist = player_weeks.filter(pl.col("season").is_between(season - 5, season - 1))
+    pos_mean = dict(hist.group_by("position").agg(pl.col("fpts").mean()).iter_rows())
+    rated = M.expectations(pw, pos_mean)
+    ratings = M.defense_ratings(rated, season)
+    now = pw.filter(pl.col("season") == season).sort("week")
+    team = dict(now.group_by("player_id").agg(pl.col("team").last()).iter_rows())
+    weeks = sorted(schedules.filter(pl.col("season") == season)["week"].unique().to_list())
+    games = M.team_weeks(schedules, season, weeks)
+    m = M.multipliers([team.get(i) for i in ids], positions, games, ratings, dict(settings.effects), weeks, settings.byes)
+    return {int(w): m[:, k] for k, w in enumerate(weeks)}
 
 
 @dataclass
@@ -156,6 +183,7 @@ class LeagueSetup:
     picks: list[tuple[int, int, int, int]]   # (year, round, original team, owner team)
     rounds: int
     lineup: dict[str, int]
+    first_week: int = 1               # NFL week of the first week left
 
 
 def league_setup(lg: S.League, ctx: Context, xwalk: pl.DataFrame, lineup: dict[str, int]) -> LeagueSetup:
@@ -193,7 +221,7 @@ def league_setup(lg: S.League, ctx: Context, xwalk: pl.DataFrame, lineup: dict[s
             picks += [(y, k, t, t) for k in range(1, int(s.get("draft_rounds") or 5) + 1) for t in range(teams)]
     return LeagueSetup(teams, st["owner"].to_list(), roster, taxi,
                        (st["wins"] + 0.5 * st["ties"]).to_numpy().astype(float), st["points_for"].to_numpy(),
-                       sched, fmt, picks, int(s.get("draft_rounds") or 5), lineup)
+                       sched, fmt, picks, int(s.get("draft_rounds") or 5), lineup, last + 1)
 
 
 def _inputs(ctx: Context, d: int, j: int, extra: tuple[np.ndarray, np.ndarray, np.ndarray] | None,
@@ -243,24 +271,37 @@ def drop_for(ctx: Context, lg: LeagueSetup, me: int) -> int:
 
 
 def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], weeks: int,
-            rng: np.random.Generator, cfs: dict[int, list[tuple]], drop: dict[int, int]
-            ) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+            rng: np.random.Generator, cfs: dict[int, list[tuple]], drop: dict[int, int],
+            mult: np.ndarray | None = None) -> tuple[np.ndarray, dict[int, np.ndarray]]:
     """Weekly lineup points (T, weeks) for fixed rosters, and for each team
     k in `cfs` its points (C_k, weeks) under each counterfactual: ("remove",
     i) takes pool player i off, ("add", i) adds him (cutting `drop[k]`).
-    Every version sees the same weeks, so luck cancels."""
+    Every version sees the same weeks, so luck cancels. `mult` (pool,
+    weeks) scales each player's expected points each week (matchups;
+    managers see it when they set lineups) and 0 is a week out (bye)."""
     rost = np.flatnonzero(team >= 0)
     loc = np.full(len(team), -1)
     loc[rost] = np.arange(len(rost))
     pos_r = li.pos[rost]
     avail = availability(li.share[rost], weeks, OUT_RUN_WEEKS, rng)
     pts = np.zeros((len(rost), weeks))
-    for p in lineup:
-        sel = pos_r == p
-        if sel.any():
-            c = center_for(li.likelihood[p], li.talent[rost][sel], li.params[p])
-            pts[sel] = simulate_weeks(li.likelihood[p], np.repeat(c[:, None], weeks, 1), li.params[p], rng)
-    key_r = np.where(avail, li.known[rost][:, None], -np.inf)
+    if mult is None:
+        for p in lineup:
+            sel = pos_r == p
+            if sel.any():
+                c = center_for(li.likelihood[p], li.talent[rost][sel], li.params[p])
+                pts[sel] = simulate_weeks(li.likelihood[p], np.repeat(c[:, None], weeks, 1), li.params[p], rng)
+        key_r = np.where(avail, li.known[rost][:, None], -np.inf)
+    else:
+        m = mult[rost]
+        avail &= m > 0
+        for p in lineup:
+            sel = pos_r == p
+            if sel.any():
+                tal = li.talent[rost][sel][:, None] * np.where(m[sel] > 0, m[sel], 1.0)
+                c = center_for(li.likelihood[p], tal.ravel(), li.params[p]).reshape(tal.shape)
+                pts[sel] = simulate_weeks(li.likelihood[p], c, li.params[p], rng)
+        key_r = np.where(avail, li.known[rost][:, None] * m, -np.inf)
     wpos = np.array([p for p, n in NO_QB_WAIVER.items() for _ in range(n) if p in li.params], object)
     wc = {p: center_for(li.likelihood[p], np.array([li.waiver[p]]), li.params[p])[0] for p in set(wpos)}
     wkey = np.array([[li.waiver[p]] * weeks for p in wpos], float).reshape(len(wpos), weeks)
@@ -376,7 +417,12 @@ def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.r
                 continue
             cfs.setdefault(x.team, []).append((x.mode, i))
             where.setdefault(x.team, []).append(a)
-        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop)
+        mult = None
+        if j == 0 and ctx.week_mult:
+            ones = np.ones(len(team))
+            mult = np.stack([np.concatenate([ctx.week_mult.get(lg.first_week + w, ones[:P]), ones[P:]])
+                             for w in range(weeks)], 1)
+        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop, mult)
         reg = base[:, :reg_w]
         opp = np.take_along_axis(reg, sched.T, 0)
         wins = w0 + (reg > opp).sum(1) + 0.5 * (reg == opp).sum(1)
