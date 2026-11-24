@@ -547,7 +547,7 @@ def summarize(places: np.ndarray, lg: LeagueSetup, season0: int) -> pl.DataFrame
     return pl.DataFrame(rows)
 
 
-DISCOUNT = 0.80
+DISCOUNT = 0.85   # default only: the CLI passes the format's discount (ben, 2026-11-24: 0.85)
 
 
 def asset_values(delta: np.ndarray, assets: list[Asset], ctx: Context, lg: LeagueSetup,
@@ -613,7 +613,7 @@ def main() -> None:
     summarize(places, lg, ctx.season0).write_parquet(out / "odds.parquet")
     np.save(out / "places.npy", places.astype(np.int8))
     if assets:
-        asset_values(delta, assets, ctx, lg).write_parquet(out / "values.parquet")
+        asset_values(delta, assets, ctx, lg, load_format(a.format).discount).write_parquet(out / "values.parquet")
     (out / "run.json").write_text(json.dumps({
         "as_of": a.as_of.isoformat(), "format": a.format, "league": a.league,
         "sleeper_pull": sl.pull_date.isoformat() if sl.pull_date else None, "leagues": a.leagues, "seed": a.seed,
