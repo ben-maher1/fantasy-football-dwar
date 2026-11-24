@@ -65,6 +65,7 @@ log = logging.getLogger(__name__)
 OUT_RUN_WEEKS = 2.1
 SPREAD = {"RB": 1.35, "WR": 1.2, "TE": 1.25}    # weekly spread calibration (reports/title_value)
 NO_QB_WAIVER = {"QB": 0, "RB": 5, "WR": 5, "TE": 4}
+TRADABLE = 3     # rookie drafts Sleeper lets teams trade; later ones are simulated (own picks) but not valued as assets
 
 
 @dataclass
@@ -143,7 +144,11 @@ def build_context(as_of: date, format_name: str) -> Context:
     _, first = np.unique(np.array(ids), return_index=True)
     keep = np.sort(first)
     traces: dict = {}
-    pick_values(fits, tables, snap.schedules, inputs, fmt, cfg, dict(model_cfg.min_plays or {}),
+    # Every rookie draft in the horizon gets a class, not just the ones the board values: teams keep
+    # drafting with their own picks after the tradable years (ben, 2026-11-24).
+    pcfg = cfg.model_copy(update={"picks": cfg.picks.model_copy(update={"years": cfg.horizon_seasons})}) \
+        if cfg.picks is not None else cfg
+    pick_values(fits, tables, snap.schedules, inputs, fmt, pcfg, dict(model_cfg.min_plays or {}),
                 np.random.default_rng([model_cfg.seed, 7]), traces=traces)
     rookies = {}
     for year, (rank, rpos, tr) in traces.items():
@@ -291,9 +296,10 @@ def assets_for(lg: LeagueSetup, me: int) -> list[Asset]:
     """Every rostered player and owned pick, removed from its owner; and
     every one owned by another team, added to `me`."""
     out = [Asset("player", int(i), int(lg.roster[i]), "remove") for i in np.flatnonzero(lg.roster >= 0)]
-    out += [Asset("pick", k, owner, "remove") for k, (_, _, _, owner) in enumerate(lg.picks)]
+    held = {min(p[0] for p in lg.picks) + k for k in range(TRADABLE)} if lg.picks else set()
+    out += [Asset("pick", k, owner, "remove") for k, (y, _, _, owner) in enumerate(lg.picks) if y in held]
     out += [Asset("player", int(i), me, "add") for i in np.flatnonzero((lg.roster >= 0) & (lg.roster != me))]
-    out += [Asset("pick", k, me, "add") for k, (_, _, _, owner) in enumerate(lg.picks) if owner != me]
+    out += [Asset("pick", k, me, "add") for k, (y, _, _, owner) in enumerate(lg.picks) if owner != me and y in held]
     return out
 
 
