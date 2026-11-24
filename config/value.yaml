@@ -33,6 +33,56 @@ picks:                   # rookie draft pick values (value/picks.py; plan approv
   prior_shape: true      # bend the rookie prior's log-pick line to the fit's own rookies: it overrated top-8 NFL picks, underrated picks 17-100 (2026-11-15)
   games_talent_corr: {QB: 0.30, RB: 0.30, WR: 0.33, TE: 0.20}  # rookie-year games go more to the better draws (corr. of fit talent and games given pick, 2013-24 rookies)
   talent_scale: {RB: 1.17}  # ben, 2026-11-15: one RB factor so 2013-21 classes' 5-season points match real (1.175; 1.13-1.22 leaving each class out). Hot-start RBs win playing time, which the model doesn't count
+links:                   # league title-odds sim only (value/links.py): weekly draws linked within NFL games; DWAR unchanged (ben, 2026-11-24)
+  mate:                  # correlation of weekly normal scores by role on one NFL team, 1999-2025 (QB-pass catcher + same-position: ben's choice, measured size)
+    QB-RB1: 0.085
+    QB-RB2: 0.040
+    QB-WR1: 0.394
+    QB-WR2: 0.320
+    QB-WR3: 0.210
+    QB-TE1: 0.277
+    RB1-RB2: -0.087
+    RB1-WR1: -0.009
+    RB1-WR2: -0.019
+    RB1-WR3: -0.040
+    RB1-TE1: -0.018
+    RB2-WR1: -0.023
+    RB2-WR2: -0.019
+    RB2-WR3: -0.005
+    WR1-WR2: 0.013
+    WR1-WR3: -0.017
+    WR1-TE1: 0.004
+    WR2-WR3: -0.019
+    WR2-TE1: -0.009
+    WR3-TE1: 0.008
+  opp:                   # across the two teams of a game (passed 1999-2019 vs 2020-25; QB-QB log score +0.013 +- 0.004)
+    QB-QB: 0.154
+    QB-RB1: -0.011
+    QB-RB2: -0.023
+    QB-WR1: 0.084
+    QB-WR2: 0.086
+    QB-WR3: 0.065
+    QB-TE1: 0.066
+    RB1-RB1: -0.040
+    RB1-RB2: -0.040
+    RB1-WR3: 0.036
+    RB1-TE1: 0.024
+    RB2-RB2: -0.045
+    RB2-WR1: -0.011
+    RB2-WR3: 0.020
+    WR1-WR1: 0.044
+    WR1-WR2: 0.050
+    WR1-WR3: 0.028
+    WR1-TE1: 0.043
+    WR2-WR2: 0.046
+    WR2-WR3: 0.044
+    WR2-TE1: 0.018
+    WR3-WR3: 0.053
+    WR3-TE1: 0.037
+    TE1-TE1: 0.034
+  handoffs:              # points vs expectation when a starter sits (1999-2025; both periods same sign)
+    QB: {QB2: -0.130, RB1: -0.054, RB2: -0.142, WR1: -0.085, WR2: -0.096, WR3: -0.132, TE1: -0.077}
+    RB1: {RB2: 0.226}
 matchups:                # league title-odds sim only (value/league_odds.py), rest of the current season; DWAR unchanged (ben, 2026-11-23)
   byes: true             # NFL bye weeks are weeks out
   effects:               # weekly expected points x (1 + dvp * opponent rating + home * +-0.5); learned 2013-19, passed on 2020-25 weeks

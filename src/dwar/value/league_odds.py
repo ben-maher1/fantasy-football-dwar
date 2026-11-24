@@ -48,6 +48,7 @@ from dwar.model.fit import load_fit, position_data
 from dwar.model.talent import for_position, simulate_weeks
 from dwar.pipeline import output_dir
 from dwar.value.dwar import position_values, season_clock, value_inputs
+from dwar.value import links as LK
 from dwar.value import matchups as M
 from dwar.value.title import (
     LeagueInputs,
@@ -82,6 +83,18 @@ class Context:
     # NFL week -> (P,) factor on expected points this season (value/matchups.py): matchup, 0 on a bye.
     # None (or a missing week) = every week alike.
     week_mult: dict[int, np.ndarray] | None = None
+    links: "LinkInputs | None" = None
+
+
+@dataclass
+class LinkInputs:
+    """Weekly links within NFL games (value/links.py)."""
+
+    team: np.ndarray                 # (P,) NFL team index of each context player, -1 unknown
+    n_teams: int
+    opp_weeks: dict[int, np.ndarray]  # NFL week this season -> (n_teams,) opponent index, -1 bye
+    chol: np.ndarray                 # (14, 14) Cholesky factor of one game's role draws
+    handoffs: dict[str, dict[str, float]]
 
 
 def build_context(as_of: date, format_name: str) -> Context:
@@ -109,7 +122,7 @@ def build_context(as_of: date, format_name: str) -> Context:
     inputs = value_inputs(fits, tables, snap.schedules, fmt, cfg, model_cfg.likelihoods(), rng,
                           model_cfg.min_plays, cov, weeks)
     G = inputs.availability.season_games
-    ids, pos, tal, sh = [], [], [], []
+    ids, pos, tal, sh, nfl = [], [], [], [], []
     for p, r in fits.items():
         latest, _, tr = position_values(p, r, inputs, tables, fmt, cfg, rng, trace=True)
         if latest.is_empty():
@@ -119,6 +132,7 @@ def build_context(as_of: date, format_name: str) -> Context:
         denom = np.full(tr.games.shape, float(G))
         denom[:, :, 0] = np.maximum(left, 1.0)[None, :]
         ids += latest["player_id"].to_list()
+        nfl += latest["team"].to_list()
         pos += [p] * latest.height
         tal.append(tr.talent)
         sh.append(np.clip(tr.games * full / denom, 0, 1) * tr.alive)
@@ -139,8 +153,11 @@ def build_context(as_of: date, format_name: str) -> Context:
     if cfg.matchups is not None:
         week_mult = matchup_weeks(tables.player_weeks, snap.schedules, inputs.clock.current,
                                   [ids[i] for i in keep], list(np.array(pos, object)[keep]), cfg.matchups)
+    links = None
+    if cfg.links is not None:
+        links = link_inputs(snap.schedules, inputs.clock.current, [nfl[i] for i in keep], cfg.links)
     return Context(
-        week_mult=week_mult,
+        week_mult=week_mult, links=links,
         season0=inputs.clock.current, player_id=[ids[i] for i in keep], position=np.array(pos, object)[keep],
         talent=talent[:, keep], share=share[:, keep], rookies=rookies,
         waiver={p: float(np.mean(v)) for p, v in inputs.replacement.items()},
@@ -148,6 +165,24 @@ def build_context(as_of: date, format_name: str) -> Context:
                 for p, d in inputs.draws.items()},
         likelihood={p: for_position(model_cfg.likelihoods(), p) for p in inputs.draws},
     )
+
+
+def link_inputs(schedules: pl.DataFrame, season: int, teams: list[str | None], settings) -> LinkInputs:
+    """NFL team indices, this season's weekly opponents and the game draw
+    factor for the league sim's links."""
+    weeks = sorted(schedules.filter(pl.col("season") == season)["week"].unique().to_list())
+    games = M.team_weeks(schedules, season, weeks)
+    names = sorted(set(games["team"].to_list()))
+    ix = {t: k for k, t in enumerate(names)}
+    opp = {}
+    for w in weeks:
+        o = np.full(len(names), -1)
+        for t, op in games.filter(pl.col("week") == w).select("team", "opponent").iter_rows():
+            o[ix[t]] = ix[op]
+        opp[int(w)] = o
+    team = np.array([ix.get(t, -1) if t is not None else -1 for t in teams], int)
+    return LinkInputs(team, len(names), opp, LK.game_cholesky(dict(settings.mate), dict(settings.opp)),
+                      {k: dict(v) for k, v in settings.handoffs.items()})
 
 
 def matchup_weeks(player_weeks: pl.DataFrame, schedules: pl.DataFrame, season: int, ids: list[str],
@@ -272,18 +307,35 @@ def drop_for(ctx: Context, lg: LeagueSetup, me: int) -> int:
 
 def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], weeks: int,
             rng: np.random.Generator, cfs: dict[int, list[tuple]], drop: dict[int, int],
-            mult: np.ndarray | None = None) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+            mult: np.ndarray | None = None, link: tuple | None = None) -> tuple[np.ndarray, dict[int, np.ndarray]]:
     """Weekly lineup points (T, weeks) for fixed rosters, and for each team
     k in `cfs` its points (C_k, weeks) under each counterfactual: ("remove",
     i) takes pool player i off, ("add", i) adds him (cutting `drop[k]`).
     Every version sees the same weeks, so luck cancels. `mult` (pool,
     weeks) scales each player's expected points each week (matchups;
-    managers see it when they set lineups) and 0 is a week out (bye)."""
+    managers see it when they set lineups) and 0 is a week out (bye).
+    `link` (pool NFL team, role, (weeks, teams) NFL opponents, Cholesky
+    factor, handoffs, number of NFL teams) links weekly draws within NFL
+    games and moves teammates' expected points when a QB1 or RB1 sits."""
     rost = np.flatnonzero(team >= 0)
     loc = np.full(len(team), -1)
     loc[rost] = np.arange(len(rost))
     pos_r = li.pos[rost]
-    avail = availability(li.share[rost], weeks, OUT_RUN_WEEKS, rng)
+    z = None
+    if link is not None:
+        lt, lr, lo, L, hand, nT = link
+        av = availability(li.share, weeks, OUT_RUN_WEEKS, rng)
+        if mult is not None:
+            av &= mult > 0
+        hm = LK.handoff_mult(av, lt, lr, nT, hand)
+        q1 = LK.holders(lt, lr, nT)[:, 0]
+        qb_out = np.zeros((nT, weeks), bool)
+        qb_out[q1 >= 0] = ~av[q1[q1 >= 0]]
+        z = LK.game_draws(lt, lr, qb_out, lo, L, rng)[rost]
+        avail = av[rost]
+        mult = hm if mult is None else mult * hm
+    else:
+        avail = availability(li.share[rost], weeks, OUT_RUN_WEEKS, rng)
     pts = np.zeros((len(rost), weeks))
     if mult is None:
         for p in lineup:
@@ -300,7 +352,8 @@ def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], 
             if sel.any():
                 tal = li.talent[rost][sel][:, None] * np.where(m[sel] > 0, m[sel], 1.0)
                 c = center_for(li.likelihood[p], tal.ravel(), li.params[p]).reshape(tal.shape)
-                pts[sel] = simulate_weeks(li.likelihood[p], c, li.params[p], rng)
+                pts[sel] = (simulate_weeks(li.likelihood[p], c, li.params[p], rng) if z is None
+                            else LK.weekly_points(c, li.params[p], z[sel]))
         key_r = np.where(avail, li.known[rost][:, None] * m, -np.inf)
     wpos = np.array([p for p, n in NO_QB_WAIVER.items() for _ in range(n) if p in li.params], object)
     wc = {p: center_for(li.likelihood[p], np.array([li.waiver[p]]), li.params[p])[0] for p in set(wpos)}
@@ -422,7 +475,18 @@ def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.r
             ones = np.ones(len(team))
             mult = np.stack([np.concatenate([ctx.week_mult.get(lg.first_week + w, ones[:P]), ones[P:]])
                              for w in range(weeks)], 1)
-        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop, mult)
+        link = None
+        if ctx.links is not None:
+            L_ = ctx.links
+            lt = np.concatenate([L_.team, np.full(len(team) - P, -1)])
+            lr = LK.roles(lt, li.pos, li.known if li.known is not None else li.talent)
+            if j == 0:
+                nobye = np.full(L_.n_teams, -1)
+                lo = np.stack([L_.opp_weeks.get(lg.first_week + w, nobye) for w in range(weeks)])
+            else:
+                lo = LK.random_opponents(L_.n_teams, weeks, rng)
+            link = (lt, lr, lo, L_.chol, L_.handoffs, L_.n_teams)
+        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop, mult, link)
         reg = base[:, :reg_w]
         opp = np.take_along_axis(reg, sched.T, 0)
         wins = w0 + (reg > opp).sum(1) + 0.5 * (reg == opp).sum(1)
