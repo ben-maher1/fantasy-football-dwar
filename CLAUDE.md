@@ -81,7 +81,7 @@ From talent to DWAR:
    superflex allocated by optimal lineups).
 2. Points above replacement (PAR) per week → wins, using the standard deviation of
    weekly team scores in the configured league format (points-per-win conversion).
-3. Project forward the rest of this season plus 5 more (ben, 2026-11-07: 5 seasons, tested 5 out for WRs; discount 0.85 since ben, 2026-11-24, was 0.80) via posterior predictive draws (age curve +
+3. Project forward the rest of this season plus 10 more (ben, 2026-11-24: 10 seasons at 0.85 so later picks keep their careers; was 5 at 0.80 from 2026-11-07, tested 5 out for WRs) via posterior predictive draws (age curve +
    random-walk talent + availability + survival). Apply a discount factor per future
    season (configurable, default 0.85) to reflect contention timelines and
    uncertainty.
@@ -92,8 +92,8 @@ Rookie draft picks (value/picks.py, ben 2026-11-14/15): each past NFL class (201
 is put in draft-day order by the model's draft-time view (no rookie ADP: no free
 history). Slot k's value is the pooled distribution of DWAR futures for the k-th
 rookie across classes, simulated from the fit's rookie prior and the board's
-projection, never per-slot realized averages (too noisy). 5 rounds x 12, next 5
-rookie drafts. Checked by draft-day band against real 5-season careers; picks bend
+projection, never per-slot realized averages (too noisy). 5 rounds x 12, next 3
+rookie drafts (the years Sleeper lets teams hold; ben, 2026-11-24). Checked by draft-day band against real 5-season careers; picks bend
 the prior's log-pick line to the fit's own rookies, tie rookie-year games to talent,
 and scale RB rookie scoring by one factor learned from history (config/value.yaml).
 Output: picks.parquet beside dwar.parquet.
