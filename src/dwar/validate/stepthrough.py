@@ -282,6 +282,7 @@ class Player:
     qb: list[np.ndarray]             # each week's QB rating (0 when unknown)
     exits: list[np.ndarray] | None = None  # each week: an injury exit (scored, but not used to update)
     usage: list[np.ndarray] | None = None  # each week's (n, 2) usage from the season's earlier games (data.usage_design)
+    usage_hold: list[np.ndarray] | None = None  # usage held for the rest of a season instead (data.usage_design_hold)
 
     def qb_before(self, j: int, k: int) -> float:
         """The QB rating in the last game before game k of season j (0 before any)."""
@@ -308,6 +309,7 @@ def players(d: ModelData) -> list[Player]:
             qb=[(d.obs_qb[order] if d.obs_qb is not None else np.zeros(d.n_obs))[obs_ps == i] for i in ps],
             exits=None if d.obs_exit is None else [d.obs_exit[order][obs_ps == i] for i in ps],
             usage=None if d.obs_usage is None else [d.obs_usage[order][obs_ps == i] for i in ps],
+            usage_hold=None if d.obs_usage_hold is None else [d.obs_usage_hold[order][obs_ps == i] for i in ps],
         ))
     return out
 
@@ -399,12 +401,14 @@ class Filter:
         return self.x[idx].copy(), self.dev[idx].copy(), self.draw[idx], shift, self.bump[idx] + self.fluke[idx]
 
 
-def _usage_shift(s: Settings, p: Player, j: int, k: int, draw: np.ndarray) -> np.ndarray | float:
+def _usage_shift(s: Settings, p: Player, j: int, k: int, draw: np.ndarray, hold: bool = False) -> np.ndarray | float:
     """Usage effect for game k of season j: known from the season's earlier
-    games; games past the last played hold the latest known value."""
-    if s.gamma_usage is None or p.usage is None or not len(p.usage[j]):
+    games; games past the last played hold the latest known value. `hold`
+    (rest-of-season forecasts) uses Player.usage_hold when there is one."""
+    use = p.usage_hold if hold and p.usage_hold is not None else p.usage
+    if s.gamma_usage is None or use is None or not len(use[j]):
         return 0.0
-    u = p.usage[j][min(k, len(p.usage[j]) - 1)]
+    u = use[j][min(k, len(use[j]) - 1)]
     return s.gamma_usage[draw] @ u
 
 
@@ -459,7 +463,7 @@ def _simulate_ahead(f: Filter, j: int, done: int, horizon_games: list[int], rng:
         if h == 0:
             # This season: usage as of the next game, held for the rest of
             # it (later games' usage is unknown). Later seasons: none.
-            shift = shift + _usage_shift(s, p, j, done, draw)
+            shift = shift + _usage_shift(s, p, j, done, draw, hold=True)
         lat = np.empty((r, n_games))
         for k in range(n_games):
             x, dev = _game_move(s, x, dev, draw, h == 0 and k == 0 and done == 0 and j == 0, cg, rng)

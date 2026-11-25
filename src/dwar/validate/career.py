@@ -107,6 +107,13 @@ VARIANTS: dict[str, dict] = {
     # rb_fill = rb_usage + a shift in those games.
     "rb_fill": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
                 "usage": (POSITION,), "fill_in": (POSITION,), "sampler": {"draws": 3500}},
+    # 2026-11-25 (ben, Emmett Johnson): rb_fill's fit, but rest-of-season
+    # forecasts hold carry share from games the lead back played only (his
+    # fill-in workload is assumed to go when he is back). Scored on five-
+    # season value (horizon -1) and for backups with fill-in games.
+    "rb_fill_hold": {"game_steps": (POSITION,), "game_mode": "form", "qb_drift": (), "young_steps": (POSITION,), "form_rho": None,
+                     "usage": (POSITION,), "fill_in": (POSITION,), "sampler": {"draws": 3500}, "fill_hold": True,
+                     "reuse_fit": {p: "rb_fill" for p in ("p14", "p17", "dev", "holdout")}},
     # TE step 1 (plan "game-by-game TE model with usage and efficiency",
     # ben 2026-11-14): the current TE model (season level, with growth and
     # first-round step as config/model.yaml has for TE) vs the game-by-game
@@ -293,6 +300,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     fade = v.pop("fade_qb", False)
     reuse = v.pop("reuse_fit", {}).get(period)
     particles = v.pop("particles", PARTICLES)
+    fill_hold = v.pop("fill_hold", False)
     horizon, discount = v.pop("horizon", HORIZON), v.pop("discount", DISCOUNT)
     if "sampler" in v:
         v["sampler"] = base.sampler.model_copy(update=v["sampler"])
@@ -334,7 +342,7 @@ def run(name: str, period: str = "dev", seed: int = 0) -> Path:
     full = build_model_data(
         _tables(OUTCOMES_AS_OF), POSITION, first_season, min_plays=cfg.min_plays.get(POSITION, 0),
         unplayed_rookies=False, reference_players=d.player_ids, injury_exits="flag" if exits else "keep",
-        fill_in=POSITION in cfg.fill_in,
+        fill_in=POSITION in cfg.fill_in, fill_hold=fill_hold,
         eff_rating=POSITION in cfg.eff_drift,
         prospect_covariates=None if prospect is None else prospect.select("player_id", *cfg.prospect[POSITION]),
     )

@@ -63,6 +63,7 @@ class ModelData:
     obs_exit: np.ndarray | None = None      # (n_obs,) injury-exit game (features/exits.py), kept only with injury_exits="flag"
     obs_usage: np.ndarray | None = None     # (n_obs, 2) usage from the season's earlier games (usage_design); None without usage columns
     ps_usage_next: np.ndarray | None = None  # (n_ps, 2) usage as of a next game after each player-season's last (value layer)
+    obs_usage_hold: np.ndarray | None = None  # (n_obs, 3) like obs_usage with fill_hold: carry share from earlier non-fill-in games only, fill-in column 0 (rest-of-season forecasts)
 
     @property
     def n_obs(self) -> int:
@@ -200,6 +201,25 @@ def usage_design(obs: pl.DataFrame) -> np.ndarray:
     return o.select("u1", "u2").to_numpy().astype(float)
 
 
+def usage_design_hold(obs: pl.DataFrame) -> np.ndarray:
+    """(n_obs, 3) usage to hold for the rest of a season from each game on:
+    carry share over the last (up to) 3 earlier games the team's lead back
+    played (fill-in games skipped: their workload goes when he is back), the
+    same snap-share change as usage_design, and a fill-in column of 0 (the
+    lead back is assumed back). Needs obs["fill_in"]."""
+    snap = usage_design(obs)[:, 1]
+    o = obs.with_row_index("_u").sort("player_id", "season", "week").with_columns(
+        _cs=pl.when(pl.col("fill_in").fill_null(False)).then(None).otherwise(pl.col("carry_share").cast(pl.Float64)))
+    by = ["player_id", "season"]
+    reg = (o.filter(pl.col("_cs").is_not_null())
+           .with_columns(_r=pl.col("_cs").rolling_mean(3, min_samples=1).over(by)).select("_u", "_r"))
+    o = (o.join(reg, on="_u", how="left").sort("player_id", "season", "week")
+         .with_columns(_r=pl.col("_r").shift(1).over(by))
+         .with_columns(_r=pl.col("_r").forward_fill().over(by))
+         .with_columns(u1=(pl.col("_r") - CARRY_SHARE_REF).fill_null(0.0).fill_nan(0.0)).sort("_u"))
+    return np.column_stack([o["u1"].to_numpy().astype(float), snap, np.zeros(o.height)])
+
+
 def build_model_data(
     tables: PlayerTables,
     position: str = "WR",
@@ -213,6 +233,7 @@ def build_model_data(
     reference_players: tuple[str, ...] | None = None,
     injury_exits: str = "keep",
     fill_in: bool = False,
+    fill_hold: bool = False,
     eff_rating: bool = False,
     censored_start: bool = False,
 ) -> ModelData:
@@ -385,6 +406,7 @@ def build_model_data(
     y = obs["fpts"].to_numpy().astype(float)
     obs_usage = usage_design(obs) if "carry_share" in obs.columns else None
     ps_usage_next = None
+    obs_usage_hold = None
     if obs_usage is not None:
         # One extra (unplayed) game after each player-season's last, so its
         # usage is what the next game would see.
@@ -401,6 +423,8 @@ def build_model_data(
                 raise ValueError("fill_in needs player_weeks.fill_in")
             obs_usage = np.column_stack([obs_usage, obs["fill_in"].fill_null(False).to_numpy().astype(float)])
             ps_usage_next = np.column_stack([ps_usage_next, np.zeros(ps.height)])
+            if fill_hold:
+                obs_usage_hold = usage_design_hold(obs)
     if eff_rating:
         # The player's own yards per target stands in for the QB rating
         # (features/efficiency.py), from all his position's games.
@@ -453,6 +477,7 @@ def build_model_data(
         obs_career_games=obs["career_games"].fill_null(0).to_numpy().astype(float),
         obs_qb=obs_qb,
         obs_usage=obs_usage,
+        obs_usage_hold=obs_usage_hold,
         ps_usage_next=ps_usage_next,
         ps_qb_end=ps_qb_end,
         ps_career_games=cg["cg0"].to_numpy().astype(float),
