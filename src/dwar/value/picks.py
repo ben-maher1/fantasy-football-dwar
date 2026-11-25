@@ -37,8 +37,8 @@ import polars as pl
 
 from dwar.config import LeagueFormat, ValueConfig
 from dwar.features.player_tables import PlayerTables
-from dwar.model.fit import FitResult
 from dwar.model.data import pick_curve, pick_quad_feature
+from dwar.model.fit import FitResult
 from dwar.value.availability import (
     Logistic,
     _sigmoid,
@@ -398,9 +398,14 @@ def _ordinal(n: int) -> str:
 def pick_values(
     fits: dict[str, FitResult], tables: PlayerTables, schedules: pl.DataFrame, inputs: ValueInputs,
     fmt: LeagueFormat, cfg: ValueConfig, min_plays: dict[str, int], rng: np.random.Generator,
+    traces: dict | None = None,
 ) -> PickValues:
     """Values of the next `cfg.picks.years` rookie drafts' picks, 1.01 to
-    `fmt.rookie_rounds`.`fmt.teams`, plus early/mid/late groups per round."""
+    `fmt.rookie_rounds`.`fmt.teams`, plus early/mid/late groups per round.
+
+    With `traces` (a dict), each year's sample rookies are kept there for
+    league simulations (value/league_odds.py): `traces[year]` = (rank in
+    class by value, position, SeasonTrace), columns in the same order."""
     pc = cfg.picks
     assert pc is not None
     static = tables.player_static
@@ -419,7 +424,7 @@ def pick_values(
     n_picks = fmt.rookie_rounds * fmt.teams
     pick_rows, rookie_rows = [], []
     for year in range(inputs.clock.current + 1, inputs.clock.current + 1 + pc.years):
-        draws_by, meta = [], []
+        draws_by, meta, trs = [], [], []
         for p in positions:
             sub = rookies.filter(pl.col("position") == p)
             if sub.is_empty() or p not in models:
@@ -436,6 +441,7 @@ def pick_values(
             pts = (g * ppg).sum(axis=-1)
             pq = np.percentile(pts, (5, 25, 75, 95), axis=0)
             draws_by.append(total)
+            trs.append(tr)
             meta.append(sub.with_columns(
                 hit=pl.Series(hit.mean(axis=0)), bust=pl.Series(1.0 - ok.mean(axis=0)),
                 points_mean=pl.Series(pts.mean(axis=0)),
@@ -450,6 +456,10 @@ def pick_values(
             rank=pl.col("dwar_mean").rank("ordinal", descending=True).over("draft_year").cast(pl.Int64)
         )
         rookie_rows.append(m)
+        if traces is not None:
+            traces[year] = (m["rank"].to_numpy(), m["position"].to_numpy(),
+                            SeasonTrace(*(np.concatenate([getattr(t, f) for t in trs], axis=1)
+                                          for f in ("talent", "games", "alive", "wins", "full"))))
         slot_cols = {k: m.filter(pl.col("rank") == k)["col"].to_numpy() for k in range(1, n_picks + 1)}
         slot_meta = {k: m.filter(pl.col("rank") == k) for k in range(1, n_picks + 1)}
 

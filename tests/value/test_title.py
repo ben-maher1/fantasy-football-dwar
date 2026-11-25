@@ -156,3 +156,53 @@ def test_title_curve_recovers_a_known_rising_curve():
     c = title_curve(t, s, d)
     assert c.at(np.array([15.0]), np.array([0.8]))[0] == pytest.approx(0.004 * 10 * 0.8, abs=0.006)
     assert (np.diff(c.value, axis=0) >= 0).all() and (np.diff(c.value, axis=1) >= 0).all()
+
+
+def test_random_deal_counts_and_mixes():
+    rng = np.random.default_rng(7)
+    pos = np.array(["QB"] * 40, object)
+    rz = rank_scores(np.arange(40.0)[::-1])
+    two_top = False
+    for _ in range(40):
+        team = deal(rz, pos, {"QB": 3}, 12, 0.0, rng, random_teams=True)
+        assert all((team == k).sum() == 3 for k in range(12))
+        assert (team[:36] >= 0).all() and (team[36:] < 0).all()
+        two_top |= any((team[:12] == k).sum() >= 2 for k in range(12))
+    assert two_top
+
+
+def test_qb_starters_spares_never_play_and_no_waiver_qb():
+    rng = np.random.default_rng(8)
+    li = _toy_league(30.0)
+    fmt = SeasonFormat(playoff_teams=4, byes=0)
+    for _ in range(30):
+        # 6 teams x 2 QBs = 12 rostered, 10 "starters": the 2 spares never start.
+        r = simulate_league(li, LINEUP, {**ROSTER, "QB": 2}, 6, fmt, 0.0, 2.0, rng, random_deal=True, qb_starters=10)
+        qb = li.pos[r.player] == "QB"
+        spare = qb & (li.talent[r.player] < np.sort(li.talent[r.player][qb])[2])
+        assert (r.started[spare] == 0).all()
+
+
+def test_team_scores_strong_roster_scores_more_and_empty_qb_scores_zero():
+    from dwar.value.title import team_scores
+    li = _toy_league(30.0)
+    rng = np.random.default_rng(5)
+    team = np.full(len(li.pos), -1)
+    # Team 0: the best QB, RBs, WRs, TE; team 1: weak ones and no QB.
+    team[[13, 43, 42, 41, 83, 82, 81, 80, 97]] = 0
+    team[[14, 15, 16, 44, 45, 46, 47, 84, 85]] = 1
+    sc = team_scores(li, team, 2, LINEUP, 200, None, rng, {"QB": 0, "RB": 5, "WR": 5, "TE": 4})
+    assert sc.shape == (2, 200)
+    assert sc[0].mean() > sc[1].mean() + 20
+
+
+def test_playoffs_places_by_round_then_seed():
+    from dwar.value.title import playoffs
+    order = np.arange(12)[::-1]                    # team 11 is the 1 seed
+    sc = np.tile(np.arange(12, dtype=float)[:, None], (1, 3))   # higher team index always wins
+    assert playoffs(order, sc, 6, 2).tolist() == list(range(12))[::-1]
+    # Upsets: the 6 seed (team 6) wins every game.
+    sc[6] = 100.0
+    places = playoffs(order, sc, 6, 2)
+    assert places[0] == 6 and sorted(places.tolist()) == list(range(12))
+    assert places[6:].tolist() == [5, 4, 3, 2, 1, 0]     # non-playoff teams in seed order

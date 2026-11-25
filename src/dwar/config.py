@@ -222,6 +222,21 @@ class Picks(_Frozen):
     prior_shape: bool = False      # bend the rookie prior's straight line in log pick to the fit's own rookies (value/picks.py)
 
 
+class Matchups(_Frozen):
+    """Rest-of-season NFL matchups and byes in the league title-odds sim
+    (value/matchups.py; ben, 2026-11-23)."""
+    byes: bool = True                              # a player's bye week is a week out
+    effects: dict[str, dict[str, float]] = {}      # position -> {"dvp": .., "home": ..}; others unchanged
+
+
+class Links(_Frozen):
+    """Teammate and opponent links in the league title-odds sim
+    (value/links.py; ben, 2026-11-24)."""
+    mate: dict[str, float] = {}                    # "QB-WR1" -> weekly correlation within an NFL team
+    opp: dict[str, float] = {}                     # "QB-QB" -> across the two teams of a game
+    handoffs: dict[str, dict[str, float]] = {}     # out role -> {teammate role: effect on expected points}
+
+
 class ValueConfig(_Frozen):
     draws: int = Field(gt=0)                 # posterior draws carried into the value layer
     horizon_seasons: int = Field(ge=0)       # full seasons valued after the current one
@@ -248,6 +263,8 @@ class ValueConfig(_Frozen):
     random_deal: bool = False                # with-and-without rosters dealt at random each simulated week, not a snake within each position (ben, 2026-11-21)
     old_star: dict[str, OldStar] = {}
     late_pick: dict[str, LatePick] = {}      # positions whose productive young late picks are pulled back        # positions whose old stars' future seasons are pulled back
+    links: Links | None = None               # league title-odds sim only: teammate/opponent weekly links + QB/RB1-out effects; None = off
+    matchups: Matchups | None = None           # league title-odds sim only: rest-of-season matchups + byes; None = off
     picks: Picks | None = None               # rookie draft pick values (value/picks.py); None = not valued
 
 

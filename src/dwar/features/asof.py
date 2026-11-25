@@ -83,7 +83,9 @@ class AsOfSnapshot:
 
 def _gamedays(schedules: pl.DataFrame) -> pl.DataFrame:
     return schedules.filter(pl.col("game_type") == REGULAR_SEASON).select(
-        "game_id", "season", "week", "home_team", "away_team", gameday=pl.col("gameday").str.to_date()
+        "game_id", "season", "week", "home_team", "away_team", gameday=pl.col("gameday").str.to_date(),
+        # Home / away / neutral site, known when the schedule is published (value/matchups.py).
+        location=pl.col("location") if "location" in schedules.columns else pl.lit(None, pl.Utf8),
     )
 
 
