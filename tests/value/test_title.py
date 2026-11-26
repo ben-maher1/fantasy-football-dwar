@@ -206,3 +206,16 @@ def test_playoffs_places_by_round_then_seed():
     places = playoffs(order, sc, 6, 2)
     assert places[0] == 6 and sorted(places.tolist()) == list(range(12))
     assert places[6:].tolist() == [5, 4, 3, 2, 1, 0]     # non-playoff teams in seed order
+
+
+def test_superflex_takes_the_best_player_left_after_flex():
+    # QB 30, QB 25, RB 20, RB 15, WR 10: QB, RB, FLEX, SUPERFLEX -> QB 30, RB 20, FLEX RB 15, SF QB 25.
+    pos = np.array(["QB", "QB", "RB", "RB", "WR"], object)
+    key = np.array([30.0, 25.0, 20.0, 15.0, 10.0])
+    pts = key.copy()
+    lineup = {"QB": 1, "RB": 1, "FLEX": 1, "SUPERFLEX": 1}
+    assert lineup_scores(key, pts, pos, lineup) == 90
+    # With the second QB out, the superflex slot falls back to the WR.
+    key2 = key.copy()
+    key2[1] = -np.inf
+    assert lineup_scores(key2, pts, pos, lineup) == 75

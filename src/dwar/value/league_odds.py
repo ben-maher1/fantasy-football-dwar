@@ -226,6 +226,10 @@ class LeagueSetup:
     lineup: dict[str, int]
     first_week: int = 1               # NFL week of the first week left
     division: np.ndarray | None = None  # (teams,) Sleeper division; None or one division = no division seeding
+    # Free agents simulated alongside the rosters so they can be added (redraft pickups); never in a lineup
+    # unless added. Context player indices.
+    free: np.ndarray | None = None
+    waiver_slots: dict[str, int] | None = None   # waiver refills per position; None = NO_QB_WAIVER
 
 
 def seed_order(wins: np.ndarray, pf: np.ndarray, division: np.ndarray | None) -> np.ndarray:
@@ -329,9 +333,62 @@ def drop_for(ctx: Context, lg: LeagueSetup, me: int) -> int:
     return int(mine[np.argmin(proj[mine])])
 
 
+def redraft_context(ctx: Context) -> Context:
+    """Redraft mode (ben, 2026-11-26): only the rest of this season counts,
+    so keep season 0 and no rookie classes."""
+    return replace(ctx, talent=ctx.talent[:, :, :1].copy(), share=ctx.share[:, :, :1].copy(), rookies={})
+
+
+def scale_points(ctx: Context, factor: np.ndarray) -> Context:
+    """Every player's expected points times his own `factor` (P,), e.g. a
+    league that also scores first downs, from fits under base scoring
+    (value/scoring_scale.py). The weekly spread on the model's square-root
+    scale is kept."""
+    return replace(ctx, talent=ctx.talent * np.asarray(factor, float)[None, :, None])
+
+
+def rest_of_season(ctx: Context) -> np.ndarray:
+    """(P,) expected points left this season: mean talent x mean share."""
+    return (ctx.talent[:, :, 0] * ctx.share[:, :, 0]).mean(0)
+
+
+def free_agent_waiver(ctx: Context, lg: LeagueSetup, rank: int = 3) -> dict[str, float]:
+    """Waiver level from the league's real free agents: per position, the
+    per-game rate of the `rank`-th best unrostered player by points left
+    this season (the best one or two tend to be claimed first)."""
+    exp, rate = rest_of_season(ctx), ctx.talent[:, :, 0].mean(0)
+    out = dict(ctx.waiver)
+    for p in out:
+        idx = np.flatnonzero((lg.roster < 0) & (ctx.position == p))
+        if len(idx):
+            out[p] = float(rate[idx[np.argsort(-exp[idx], kind="stable")][min(rank, len(idx)) - 1]])
+    return out
+
+
+def free_agent_assets(ctx: Context, lg: LeagueSetup, me: int, n: int) -> tuple[list[Asset], np.ndarray]:
+    """The `n` unrostered players with the most points left this season, as
+    pickups for `me` ("add", cutting `me`'s drop player), and their indices."""
+    exp = rest_of_season(ctx)
+    idx = np.flatnonzero(lg.roster < 0)
+    top = idx[np.argsort(-exp[idx], kind="stable")][:n]
+    return [Asset("player", int(i), me, "add") for i in top], top
+
+
+def redraft_setup(ctx: Context, lg: LeagueSetup, me: int, free_agents: int, rank: int = 3
+                  ) -> tuple[Context, LeagueSetup, list[Asset]]:
+    """Redraft context and league: one season, no picks, waiver level from
+    the real free agents (a QB too: redraft managers stream one), and the
+    top free agents simulated so `me` can add them."""
+    ctx = replace(ctx, waiver=free_agent_waiver(ctx, lg, rank))
+    fa, top = free_agent_assets(ctx, lg, me, free_agents) if me >= 0 else ([], np.zeros(0, int))
+    slots = {p: max(n, 1) for p, n in NO_QB_WAIVER.items()}
+    return ctx, replace(lg, picks=[], free=top, waiver_slots=slots), fa
+
+
 def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], weeks: int,
             rng: np.random.Generator, cfs: dict[int, list[tuple]], drop: dict[int, int],
-            mult: np.ndarray | None = None, link: tuple | None = None) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+            mult: np.ndarray | None = None, link: tuple | None = None,
+            waiver_slots: dict[str, int] | None = None) -> tuple[np.ndarray, dict[int, np.ndarray]]:
     """Weekly lineup points (T, weeks) for fixed rosters, and for each team
     k in `cfs` its points (C_k, weeks) under each counterfactual: ("remove",
     i) takes pool player i off, ("add", i) adds him (cutting `drop[k]`).
@@ -341,7 +398,7 @@ def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], 
     `link` (pool NFL team, role, (weeks, teams) NFL opponents, Cholesky
     factor, handoffs, number of NFL teams) links weekly draws within NFL
     games and moves teammates' expected points when a QB1 or RB1 sits."""
-    rost = np.flatnonzero(team >= 0)
+    rost = np.flatnonzero(team >= 0)      # rostered, plus free agents on team T (never scored unless added)
     loc = np.full(len(team), -1)
     loc[rost] = np.arange(len(rost))
     pos_r = li.pos[rost]
@@ -379,7 +436,7 @@ def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], 
                 pts[sel] = (simulate_weeks(li.likelihood[p], c, li.params[p], rng) if z is None
                             else LK.weekly_points(c, li.params[p], z[sel]))
         key_r = np.where(avail, li.known[rost][:, None] * m, -np.inf)
-    wpos = np.array([p for p, n in NO_QB_WAIVER.items() for _ in range(n) if p in li.params], object)
+    wpos = np.array([p for p, n in (waiver_slots or NO_QB_WAIVER).items() for _ in range(n) if p in li.params], object)
     wc = {p: center_for(li.likelihood[p], np.array([li.waiver[p]]), li.params[p])[0] for p in set(wpos)}
     wkey = np.array([[li.waiver[p]] * weeks for p in wpos], float).reshape(len(wpos), weeks)
     extra_pos = np.array([p for p in ("QB", "RB", "WR", "TE") for _ in range(4)], object)   # room for 4 adds each
@@ -474,6 +531,8 @@ def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.r
             extra = (np.array(added_pos, object), np.array([t[j] for t in added_tal]), np.array([x[j] for x in added_sh]))
         li = _inputs(ctx, d, j, extra, known)
         team = np.concatenate([lg.roster, np.array(added_team, int)]) if added_pos else lg.roster.copy()
+        if lg.free is not None and len(lg.free):
+            team[lg.free] = T
         if j == 0:
             li = replace(li, share=np.where(lg.taxi, 0.0, li.share))
             reg_w, sched, w0, p0 = lg.schedule_left.shape[0], lg.schedule_left, lg.wins, lg.points
@@ -513,7 +572,7 @@ def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.r
             else:
                 lo = LK.random_opponents(L_.n_teams, weeks, rng)
             link = (lt, lr, lo, L_.chol, L_.handoffs, L_.n_teams)
-        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop, mult, link)
+        base, cf = _season(li, team, T, lg.lineup, weeks, rng, cfs, drop, mult, link, lg.waiver_slots)
         reg = base[:, :reg_w]
         opp = np.take_along_axis(reg, sched.T, 0)
         wins = w0 + (reg > opp).sum(1) + 0.5 * (reg == opp).sum(1)
@@ -599,7 +658,7 @@ def asset_values(delta: np.ndarray, assets: list[Asset], ctx: Context, lg: Leagu
         else:
             y, k, orig, owner = lg.picks[x.ref]
             ident, pos = f"{y} round {k} ({lg.owners[orig]})", "PICK"
-        rows.append({"kind": x.kind, "id": ident, "position": pos, "owner": lg.owners[owner],
+        rows.append({"kind": x.kind, "id": ident, "position": pos, "owner": lg.owners[owner] if owner >= 0 else "FA",
                      "for_team": lg.owners[x.team], "mode": x.mode,
                      "value": float(tot[:, a].mean() * 100), "se": float(tot[:, a].std() * 100 / np.sqrt(n)),
                      **{f"v{ctx.season0 + j}": float(mean_j[j, a]) for j in range(J)}})
@@ -617,13 +676,28 @@ def main() -> None:
     ap.add_argument("--pull", action="store_true", help="fetch a fresh Sleeper snapshot first")
     ap.add_argument("--me", default=None, help="Sleeper display name: also value other teams' assets to this team")
     ap.add_argument("--no-values", action="store_true", help="title odds only")
+    ap.add_argument("--redraft", action="store_true",
+                    help="only this season counts: no picks, free-agent waiver level and pickups (ben, 2026-11-26)")
+    ap.add_argument("--free-agents", type=int, default=60, help="redraft: free agents valued as pickups for --me")
+    ap.add_argument("--fits-format", default=None,
+                    help="format whose saved fits to use (default --format); its scoring is the base for --scale-scoring")
+    ap.add_argument("--scale-scoring", default=None,
+                    help="league scoring to reach by scaling each player's points from the fits' scoring "
+                         "(value/scoring_scale.py), e.g. first downs")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     t0 = time.perf_counter()
     if a.pull:
         S.pull(a.league)
     sl = S.load(a.league)
-    ctx = build_context(a.as_of, a.format)
+    fits_format = a.fits_format or a.format
+    ctx = build_context(a.as_of, fits_format)
+    if a.scale_scoring:
+        from dwar.value.scoring_scale import factors_for
+        ctx = scale_points(ctx, factors_for(a.as_of, load_format(fits_format).scoring, a.scale_scoring,
+                                            ctx.player_id, list(ctx.position), ctx.season0))
+    if a.redraft:
+        ctx = redraft_context(ctx)
     t1 = time.perf_counter()
     log.info("context: %d players, %d draws in %.0fs", len(ctx.player_id), ctx.talent.shape[0], t1 - t0)
     from dwar.config import data_dir
@@ -631,16 +705,21 @@ def main() -> None:
     xw = S.crosswalk(sl.players, load_raw("rosters").select("gsis_id", pl.col("sleeper_id").cast(pl.Utf8)),
                      load_raw("players"), S.rostered(sl)["sleeper_id"].to_list())
     lg = league_setup(sl, ctx, xw, dict(load_format(a.format).lineup))
+    me = lg.owners.index(a.me) if a.me else -1
+    fa: list[Asset] = []
+    if a.redraft:
+        ctx, lg, fa = redraft_setup(ctx, lg, me, a.free_agents)
+        log.info("redraft waiver level: %s", {p: round(v, 1) for p, v in ctx.waiver.items()})
     seasons = ctx.talent.shape[2]
     assets, drop = [], {}
     if not a.no_values:
-        me = lg.owners.index(a.me) if a.me else -1
         assets = assets_for(lg, me) if me >= 0 else [x for x in assets_for(lg, 0) if x.mode == "remove"]
+        assets += fa
         drop = {me: drop_for(ctx, lg, me)} if me >= 0 else {}
     places, delta, seeds = run(ctx, lg, a.leagues, seasons, a.seed, a.workers, assets=assets, drop=drop, with_seeds=True)
     t2 = time.perf_counter()
     log.info("%d league paths x %d seasons in %.0fs", a.leagues, seasons, t2 - t1)
-    out = output_dir(a.as_of, a.format) / f"league_{a.league}"
+    out = output_dir(a.as_of, a.format) / (f"league_{a.league}" + ("_redraft" if a.redraft else ""))
     out.mkdir(parents=True, exist_ok=True)
     summarize(places, lg, ctx.season0, seeds).write_parquet(out / "odds.parquet")
     np.save(out / "places.npy", places.astype(np.int8))
@@ -649,7 +728,8 @@ def main() -> None:
     (out / "run.json").write_text(json.dumps({
         "as_of": a.as_of.isoformat(), "format": a.format, "league": a.league,
         "sleeper_pull": sl.pull_date.isoformat() if sl.pull_date else None, "leagues": a.leagues, "seed": a.seed,
-        "me": a.me, "assets": len(assets), "drop": ctx.player_id[drop[me]] if drop else None,
+        "me": a.me, "assets": len(assets), "redraft": a.redraft, "fits_format": fits_format,
+        "scale_scoring": a.scale_scoring, "waiver": ctx.waiver, "drop": ctx.player_id[drop[me]] if drop else None,
         "rostered_matched": int((lg.roster >= 0).sum()), "rostered_total": S.rostered(sl).height,
         "weeks_left": int(lg.schedule_left.shape[0]), "runtime_s": {"context": round(t1 - t0), "sim": round(t2 - t1)},
         "data_dir": str(data_dir()),
