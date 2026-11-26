@@ -354,14 +354,16 @@ def rest_of_season(ctx: Context) -> np.ndarray:
 
 def free_agent_waiver(ctx: Context, lg: LeagueSetup, rank: int = 3) -> dict[str, float]:
     """Waiver level from the league's real free agents: per position, the
-    per-game rate of the `rank`-th best unrostered player by points left
-    this season (the best one or two tend to be claimed first)."""
-    exp, rate = rest_of_season(ctx), ctx.talent[:, :, 0].mean(0)
+    expected points per week left (rate x share of weeks played) of the
+    `rank`-th best unrostered player (the best one or two tend to be
+    claimed first). A refill plays every week, so a backup's rate when he
+    starts would overstate it (a 16-PPG backup QB who plays 3 weeks in 10)."""
+    exp = rest_of_season(ctx)
     out = dict(ctx.waiver)
     for p in out:
         idx = np.flatnonzero((lg.roster < 0) & (ctx.position == p))
         if len(idx):
-            out[p] = float(rate[idx[np.argsort(-exp[idx], kind="stable")][min(rank, len(idx)) - 1]])
+            out[p] = float(exp[idx[np.argsort(-exp[idx], kind="stable")][min(rank, len(idx)) - 1]])
     return out
 
 
