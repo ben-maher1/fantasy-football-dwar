@@ -1,0 +1,24 @@
+# Big Boy Dynasty (Sleeper league 1316547658873044992, read 2026-11-25):
+# 10 teams, 1QB, 2 RB, 2 WR, 1 TE, 3 flex (WR/RB/TE), full PPR with bonuses.
+name: bigboy_1qb_3flex_ppr
+scoring: bigboy_ppr
+teams: 10
+lineup:
+  QB: 1
+  RB: 2
+  WR: 2
+  TE: 1
+  FLEX: 3        # RB/WR/TE
+discount: 0.85   # same as ben's other league (ben, 2026-11-24)
+# Roster: 18 bench (+5 IR, +3 taxi, not counted). Split of the 27 active
+# spots from the league's own rosters on 2026-11-25 (QB 3.3, RB 7.2,
+# WR 11.2, TE 4.7 per team), rounded to sum to 27.
+roster:
+  bench: 18
+  by_position:
+    QB: 3
+    RB: 7
+    WR: 12
+    TE: 5
+  weekly: [QB]
+rookie_rounds: 5

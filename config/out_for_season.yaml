@@ -14,3 +14,8 @@ players:
     season: 2026
     known_on: 2026-11-23   # reported by ben
     note: season-ending injury (reported by ben)
+  - player_id: "00-0039075"
+    name: Puka Nacua
+    season: 2026
+    known_on: 2026-11-25   # reported by ben
+    note: out for the season (reported by ben, 2026-11-25; same entry as PR #20)

@@ -26,7 +26,16 @@ STAT_COLUMNS: dict[str, tuple[str, ...]] = {
     "pass_fd": ("passing_first_downs",),
     "rush_fd": ("rushing_first_downs",),
     "rec_fd": ("receiving_first_downs",),
+    # Long plays, counted from play-by-play (features/long_plays.py).
+    "pass_cmp_40p": ("passing_cmp_40p",),
+    "pass_td_40p": ("passing_td_40p",),
+    "rec_40p": ("receiving_40p",),
+    "rec_td_40p": ("receiving_td_40p",),
+    "rush_40p": ("rushing_40p",),
+    "rush_td_40p": ("rushing_td_40p",),
 }
+# Columns that come from play-by-play rather than nflverse weekly stats.
+LONG_PLAY_COLUMNS = tuple(c for f, cols in STAT_COLUMNS.items() if f.endswith("_40p") for c in cols)
 
 
 def _stat(col: str) -> pl.Expr:
@@ -47,6 +56,7 @@ def fantasy_points(weekly: pl.DataFrame, scoring: ScoringConfig) -> pl.DataFrame
     needed = {c for cols in used.values() for c in cols}
     if scoring.rec_bonus_by_position:
         needed |= {"receptions", "position"}
+    needed |= set(scoring.yardage_bonus)
     missing = sorted(needed - set(weekly.columns))
     if missing:
         raise ValueError(f"weekly stats missing columns for scoring '{scoring.name}': {missing}")
@@ -61,4 +71,15 @@ def fantasy_points(weekly: pl.DataFrame, scoring: ScoringConfig) -> pl.DataFrame
         )
         total = total + bonus * _stat("receptions")
 
+    for col, tiers in scoring.yardage_bonus.items():
+        bonus = pl.lit(0.0)
+        for threshold, points in sorted(tiers):
+            bonus = pl.when(_stat(col) >= threshold).then(pl.lit(float(points))).otherwise(bonus)
+        total = total + bonus
+
     return weekly.with_columns(fpts=total.round(4))
+
+
+def needs_long_plays(scoring: ScoringConfig) -> bool:
+    """True when the scoring pays for 40+ yard plays (counts from play-by-play)."""
+    return any(getattr(scoring, f) != 0 for f in STAT_COLUMNS if f.endswith("_40p"))

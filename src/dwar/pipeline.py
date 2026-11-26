@@ -14,6 +14,7 @@ import time
 from datetime import date
 from pathlib import Path
 
+from dwar.features.scoring import needs_long_plays
 from dwar.config import (
     REPO_ROOT,
     load_format,
@@ -48,7 +49,7 @@ def run(
     model_cfg, value_cfg = load_model_config(), load_value_config()
     out = output_dir(as_of, format_name, root)
     out.mkdir(parents=True, exist_ok=True)
-    raw = raw or RawTables.from_cache()
+    raw = raw or RawTables.from_cache(long_plays=needs_long_plays(load_scoring(fmt.scoring)))
     snap = asof_snapshot(raw, as_of)
     tables = build_player_tables(snap, load_scoring(fmt.scoring))
 

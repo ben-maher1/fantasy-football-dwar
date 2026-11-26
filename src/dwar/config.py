@@ -51,8 +51,21 @@ class ScoringConfig(_Frozen):
     pass_fd: float = 0.0
     rush_fd: float = 0.0
     rec_fd: float = 0.0
+    # Long-play bonuses (Sleeper's *_40p): points per 40+ yard completion,
+    # passing TD, reception, receiving TD, carry and rushing TD. Counted from
+    # play-by-play (features/long_plays.py).
+    pass_cmp_40p: float = 0.0
+    pass_td_40p: float = 0.0
+    rec_40p: float = 0.0
+    rec_td_40p: float = 0.0
+    rush_40p: float = 0.0
+    rush_td_40p: float = 0.0
     # Extra points per reception by position, e.g. TE premium = {"TE": 0.5}.
     rec_bonus_by_position: dict[str, float] = Field(default_factory=dict)
+    # Big-game bonuses by stat column, as tiers [[threshold, points], ...]:
+    # a game scores the points of the highest tier it reaches, not the sum
+    # (Sleeper's "100-199 yards" and "200+ yards" bonuses).
+    yardage_bonus: dict[str, list[tuple[float, float]]] = Field(default_factory=dict)
 
 
 class RosterSettings(_Frozen):
