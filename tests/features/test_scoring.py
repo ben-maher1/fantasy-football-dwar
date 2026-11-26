@@ -148,3 +148,25 @@ def test_matches_nflverse_fantasy_points(season):
     std = fantasy_points(stats, load_scoring("standard"))
     assert (ppr["fpts"] - ppr["fantasy_points_ppr"].fill_null(0)).abs().max() < 0.01
     assert (std["fpts"] - std["fantasy_points"].fill_null(0)).abs().max() < 0.01
+
+
+def test_yardage_bonus_tiers_do_not_stack(weekly):
+    cfg = load_scoring("ppr").model_copy(update={"yardage_bonus": {"receiving_yards": [(100, 1.0), (200, 3.0)]}})
+    df = pl.DataFrame([week(receiving_yards=y) for y in (99, 100, 199, 200, 250)])
+    diff = fantasy_points(df, cfg)["fpts"] - fantasy_points(df, load_scoring("ppr"))["fpts"]
+    assert diff.to_list() == pytest.approx([0, 1, 1, 3, 3])
+
+
+def test_bigboy_hand_computed():
+    # 320 pass yds 12.8 + 3 TD x6 18 + 300-yd bonus 1 + one 45-yd TD pass (cmp 1 + td 2) = 34.8
+    qb = week(passing_yards=320, passing_tds=3, passing_cmp_40p=1, passing_td_40p=1)
+    # 7 rec 7 + 112 yds 11.2 + 100-yd bonus 1 + one 40+ catch 1 = 20.2
+    wr = week(receptions=7, receiving_yards=112, receiving_40p=1)
+    got = fantasy_points(pl.DataFrame([qb, wr]), load_scoring("bigboy_ppr"))["fpts"].to_list()
+    assert got == pytest.approx([34.8, 20.2])
+
+
+def test_long_play_columns_required():
+    df = pl.DataFrame([week()]).drop("receiving_40p")
+    with pytest.raises(ValueError, match="receiving_40p"):
+        fantasy_points(df, load_scoring("bigboy_ppr"))

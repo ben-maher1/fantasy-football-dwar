@@ -31,6 +31,7 @@ from datetime import date
 import numpy as np
 import polars as pl
 
+from dwar.features.scoring import needs_long_plays
 from dwar.config import (
     load_format,
     load_model_config,
@@ -107,7 +108,7 @@ def build_context(as_of: date, format_name: str) -> Context:
     fmt = load_format(format_name)
     model_cfg, cfg = load_model_config(), load_value_config()
     out = output_dir(as_of, format_name)
-    snap = asof_snapshot(RawTables.from_cache(), as_of)
+    snap = asof_snapshot(RawTables.from_cache(long_plays=needs_long_plays(load_scoring(fmt.scoring))), as_of)
     tables = build_player_tables(snap, load_scoring(fmt.scoring))
     cov = {}
     if uses_situation(model_cfg):

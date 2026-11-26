@@ -27,7 +27,7 @@ from datetime import date, timedelta
 import polars as pl
 
 from dwar.config import DraftDates, load_draft_dates
-from dwar.features.scoring import STAT_COLUMNS
+from dwar.features.scoring import LONG_PLAY_COLUMNS, STAT_COLUMNS
 from dwar.ingest.nflverse import load_raw
 
 COMBINE_KNOWABLE_MONTH_DAY = (3, 15)
@@ -60,8 +60,16 @@ class RawTables:
     players: pl.DataFrame
 
     @classmethod
-    def from_cache(cls, pull_date: date | None = None) -> RawTables:
-        return cls(**{f.name: load_raw(f.name, pull_date=pull_date) for f in fields(cls)})
+    def from_cache(cls, pull_date: date | None = None, long_plays: bool = False) -> RawTables:
+        """`long_plays` adds 40+ yard play counts from play-by-play (only
+        formats with long-play bonuses need them; see `needs_long_plays`)."""
+        tables = {f.name: load_raw(f.name, pull_date=pull_date) for f in fields(cls)}
+        if long_plays:
+            from dwar.features.long_plays import with_long_plays
+
+            pbp = load_raw("pbp", pull_date=pull_date).filter(pl.col("season_type") == REGULAR_SEASON)
+            tables["player_stats"] = with_long_plays(tables["player_stats"], pbp)
+        return cls(**tables)
 
 
 @dataclass(frozen=True)
@@ -106,7 +114,7 @@ def asof_snapshot(
 
     stats = _gate(
         raw.player_stats.filter(pl.col("player_id").is_not_null())
-        .select([c for c in STAT_KEEP if c not in EXTRA_KEEP or c in raw.player_stats.columns])
+        .select([c for c in STAT_KEEP if c not in (*EXTRA_KEEP, *LONG_PLAY_COLUMNS) or c in raw.player_stats.columns])
         .join(games.select("game_id", "gameday"), on="game_id", how="inner")  # inner = REG only
         .with_columns(knowable_on=pl.col("gameday") + timedelta(days=1)),
         as_of,

@@ -1,0 +1,27 @@
+# Big Boy Dynasty (Sleeper league 1316547658873044992, read 2026-11-25):
+# full PPR, 6-point passing TDs, big-game and 40+ yard play bonuses.
+name: bigboy_ppr
+pass_yd: 0.04
+pass_td: 6
+pass_int: -2
+pass_2pt: 2
+rush_yd: 0.1
+rush_td: 6
+rush_2pt: 2
+rec: 1
+rec_yd: 0.1
+rec_td: 6
+rec_2pt: 2
+fumble_lost: -2
+st_td: 6
+pass_cmp_40p: 1
+pass_td_40p: 2
+rec_40p: 1
+rec_td_40p: 2
+rush_40p: 1
+rush_td_40p: 2
+# 300-399 passing yards +1, 400+ +3; 100-199 rushing/receiving +1, 200+ +3.
+yardage_bonus:
+  passing_yards: [[300, 1], [400, 3]]
+  rushing_yards: [[100, 1], [200, 3]]
+  receiving_yards: [[100, 1], [200, 3]]
