@@ -149,3 +149,31 @@ def test_redraft_free_agent_can_be_picked_up_and_sets_the_waiver_level():
     # The free agent alone never scores for anyone.
     places = np.stack([O.simulate_path(rctx, plain, i % 4, 1, rng, rctx.talent.mean(0))[0] for i in range(60)])
     assert (places[:, 0, 1] == 0).mean() > 0.6     # team 1 (10 PPG) beats team 0 (5 PPG)
+
+
+def test_waiver_pool_takes_unrostered_players_and_rookies_only():
+    ctx = _ctx_fa()
+    lg = _setup(ctx)
+    assert O.waiver_pool(ctx, lg, 5, np.array([0])).tolist() == [3]       # QB 0 is rostered: never a free agent
+    assert O.waiver_pool(ctx, lg, 0, np.array([3])).tolist() == [3]       # a free rookie joins even past the top n
+    assert O.waiver_pool(ctx, lg, 0, np.zeros(0, int)).tolist() == []
+
+
+def test_lowest_cut_is_the_candidate_worth_least():
+    assert O.lowest_cut({0: 2.0, 1: 0.5, 2: -0.1}, np.array([0, 1])) == 1     # 2 is not a candidate (IR/taxi)
+    assert O.lowest_cut({}, np.array([4, 5])) == 4
+
+
+def test_waiver_add_cuts_and_taxi_stash_waits_a_season():
+    # Team 0: 5-PPG QBs (one on taxi); team 1: 10 PPG; a 40-PPG QB sits unrostered.
+    ctx = _ctx_fa()
+    ctx = replace(ctx, talent=np.concatenate([np.full_like(ctx.talent[:, :2], 5.0), ctx.talent[:, 2:]], 1))
+    r, rp, rt, rs = ctx.rookies[2027]
+    ctx.rookies[2027] = (r, rp, np.full_like(rt, 1.0), rs)
+    lg = replace(_setup(ctx), free=np.array([3]))
+    assets = O.waiver_assets(np.array([3]), 0, np.array([3]))
+    assert [(a.ref, a.mode) for a in assets] == [(3, "add"), (3, "stash")]
+    rng = np.random.default_rng(6)
+    d = np.stack([O.simulate_path(ctx, lg, i % 4, 2, rng, ctx.talent.mean(0), assets, {0: 0})[1] for i in range(60)])
+    assert d[:, 0, 0].mean() > 0.4 and d[:, 1, 0].mean() > 0.4     # the add helps both seasons
+    assert (d[:, 0, 1] == 0).all() and d[:, 1, 1].mean() > 0.4     # the stash only from next season
