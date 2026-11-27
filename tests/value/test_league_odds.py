@@ -96,3 +96,16 @@ def test_a_bye_every_week_takes_the_player_out():
     on = np.stack([O.simulate_path(ctx, lg, d % 4, 1, rng, ctx.talent.mean(0))[0] for d in range(60)])
     out = np.stack([O.simulate_path(off, lg, d % 4, 1, rng, ctx.talent.mean(0))[0] for d in range(60)])
     assert (on[:, 0, 0] == 0).mean() > 0.6 and (out[:, 0, 0] == 0).mean() < 0.1
+
+
+def test_division_winners_take_the_top_seeds():
+    # Division 1: teams 0-2, division 2: teams 3-5. Teams 3 and 4 have the two best records,
+    # but team 0 wins division 1, so the seeds are 3, 0, then 4, 1, 5, 2 by record.
+    wins = np.array([7.0, 6.0, 3.0, 10.0, 10.0, 6.0])
+    pf = np.array([1100.0, 1340.0, 900.0, 1440.0, 1370.0, 1200.0])
+    div = np.array([1, 1, 1, 2, 2, 2])
+    assert O.seed_order(wins, pf, div).tolist() == [3, 0, 4, 1, 5, 2]
+    assert O.seed_order(wins, pf, None).tolist() == [3, 4, 0, 1, 5, 2]
+    # Batched over leading axes, ties on record go to points for.
+    w = np.stack([wins, np.array([6.0, 6.0, 3.0, 10.0, 10.0, 6.0])])
+    assert O.seed_order(w, pf, div)[1].tolist() == [3, 1, 4, 5, 0, 2]
