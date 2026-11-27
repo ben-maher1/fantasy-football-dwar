@@ -67,6 +67,7 @@ OUT_RUN_WEEKS = 2.1
 SPREAD = {"RB": 1.35, "WR": 1.2, "TE": 1.25}    # weekly spread calibration (reports/title_value)
 NO_QB_WAIVER = {"QB": 0, "RB": 5, "WR": 5, "TE": 4}
 TRADABLE = 3     # rookie drafts Sleeper lets teams trade; later ones are simulated (own picks) but not valued as assets
+DISCOUNT = 0.85   # default only: the CLI passes the format's discount (ben, 2026-11-24: 0.85)
 
 
 @dataclass
@@ -387,6 +388,37 @@ def redraft_setup(ctx: Context, lg: LeagueSetup, me: int, free_agents: int, rank
     return ctx, replace(lg, picks=[], free=top, waiver_slots=slots), fa
 
 
+def horizon_points(ctx: Context, discount: float = DISCOUNT) -> np.ndarray:
+    """(P,) expected points over the horizon, future seasons discounted."""
+    exp = (ctx.talent * ctx.share).mean(0)                     # (P, seasons)
+    return exp @ (discount ** np.arange(exp.shape[1]))
+
+
+def waiver_pool(ctx: Context, lg: LeagueSetup, n: int, also: np.ndarray, discount: float = DISCOUNT) -> np.ndarray:
+    """Dynasty free agents worth simulating: the `n` unrostered players with
+    the most discounted points over the horizon, plus any in `also`
+    (unrostered rookies, whose value is mostly later)."""
+    idx = np.flatnonzero(lg.roster < 0)
+    top = idx[np.argsort(-horizon_points(ctx, discount)[idx], kind="stable")][:n]
+    extra = np.asarray(also, int)
+    return np.unique(np.concatenate([top, extra[lg.roster[extra] < 0]]))
+
+
+def lowest_cut(values: dict[int, float], candidates: np.ndarray) -> int:
+    """The candidate (a player whose cut frees a bench spot) worth the
+    least to his team; ties go to the first listed."""
+    if not len(candidates):
+        raise ValueError("no player can be cut")
+    return int(min(candidates, key=lambda i: values.get(int(i), 0.0)))
+
+
+def waiver_assets(fa: np.ndarray, me: int, stash: np.ndarray | None = None) -> list[Asset]:
+    """Each free agent added to `me` (cutting `me`'s drop player), and each
+    in `stash` put on an open taxi spot instead (no cut)."""
+    out = [Asset("player", int(i), me, "add") for i in fa]
+    return out + [Asset("player", int(i), me, "stash") for i in (stash if stash is not None else [])]
+
+
 def _season(li: LeagueInputs, team: np.ndarray, T: int, lineup: dict[str, int], weeks: int,
             rng: np.random.Generator, cfs: dict[int, list[tuple]], drop: dict[int, int],
             mult: np.ndarray | None = None, link: tuple | None = None,
@@ -556,6 +588,12 @@ def simulate_path(ctx: Context, lg: LeagueSetup, d: int, seasons: int, rng: np.r
             i = x.ref if x.kind == "player" else int(pick_idx[x.ref])
             if i < 0:
                 continue
+            if x.mode == "stash":
+                # taxi stash: no cut, and he cannot start this season (counts 0)
+                if j > 0:
+                    cfs.setdefault(x.team, []).append(("trade", (("add", i),)))
+                    where.setdefault(x.team, []).append(a)
+                continue
             cfs.setdefault(x.team, []).append((x.mode, i))
             where.setdefault(x.team, []).append(a)
         mult = None
@@ -640,7 +678,6 @@ def summarize(places: np.ndarray, lg: LeagueSetup, season0: int, seeds: np.ndarr
     return pl.DataFrame(rows)
 
 
-DISCOUNT = 0.85   # default only: the CLI passes the format's discount (ben, 2026-11-24: 0.85)
 
 
 def asset_values(delta: np.ndarray, assets: list[Asset], ctx: Context, lg: LeagueSetup,
@@ -667,6 +704,68 @@ def asset_values(delta: np.ndarray, assets: list[Asset], ctx: Context, lg: Leagu
     return pl.DataFrame(rows)
 
 
+def waivers_main(a: argparse.Namespace, sl: S.League, ctx: Context, lg: LeagueSetup, xw: pl.DataFrame,
+                 me: int, t0: float, t1: float) -> None:
+    """Dynasty waiver pickups (ben, 2026-11-27). Pass 1 values `me`'s active
+    players (with and without) to find the cut; pass 2 adds each free agent
+    while cutting him, or stashes a rookie on an open taxi spot."""
+    from dwar.config import data_dir
+    from dwar.ingest.nflverse import load_raw
+    if me < 0:
+        raise SystemExit("--waivers needs --me")
+    fmt = load_format(a.format)
+    st = S.standings(sl)
+    rid = int(st["roster_id"][me])
+    where = {g: i for i, g in enumerate(ctx.player_id)}
+    ros = (S.rostered(sl).filter(pl.col("roster_id") == rid)
+           .join(xw.select("sleeper_id", "gsis_id"), on="sleeper_id", how="left"))
+    active = ros.filter(pl.col("slot") == "active")
+    idx = [where.get(g) for g in active["gsis_id"].to_list()]
+    cands = np.array([i for i in idx if i is not None], int)
+    unmatched = [n for n, i in zip(active["name"].to_list(), idx) if i is None]
+    settings = sl.league["settings"]
+    capacity = sum(1 for x in sl.league["roster_positions"] if x not in ("IR", "TAXI"))
+    open_active = capacity - active.height
+    taxi_open = int(settings.get("taxi_slots") or 0) - ros.filter(pl.col("slot") == "taxi").height
+    season = sl.season
+    pls = load_raw("players").select("gsis_id", "rookie_season", "draft_year")
+    rookie_ids = set(pls.filter(pl.coalesce("rookie_season", "draft_year") == season)["gsis_id"].to_list())
+    rookies = np.array([i for g, i in where.items() if g in rookie_ids], int)
+    pool = waiver_pool(ctx, lg, a.free_agents, rookies, fmt.discount)
+    lg = replace(lg, free=pool)
+    seasons = ctx.talent.shape[2]
+    out = output_dir(a.as_of, a.format) / f"league_{a.league}_waivers"
+    out.mkdir(parents=True, exist_ok=True)
+    cut, why = None, "open active spot"
+    if open_active <= 0 and unmatched:
+        why = f"not on the board: {unmatched[0]}"
+    elif open_active <= 0:
+        mine = [Asset("player", int(i), me, "remove") for i in cands]
+        _, d1 = run(ctx, lg, a.leagues, seasons, a.seed, a.workers, assets=mine)
+        cv = asset_values(d1, mine, ctx, lg, fmt.discount)
+        cv.write_parquet(out / "cut_values.parquet")
+        cut = lowest_cut(dict(zip(cands.tolist(), cv["value"].to_list())), cands)
+        why = "lowest title value among active players"
+        log.info("cut: %s (%.2f)", ctx.player_id[cut], float(cv["value"].min()))
+    t2 = time.perf_counter()
+    stash = np.intersect1d(pool, rookies) if taxi_open > 0 else np.zeros(0, int)
+    assets = waiver_assets(pool, me, stash)
+    _, d2 = run(ctx, lg, a.leagues, seasons, a.seed, a.workers, assets=assets,
+                drop={me: cut} if cut is not None else {})
+    t3 = time.perf_counter()
+    asset_values(d2, assets, ctx, lg, fmt.discount).write_parquet(out / "values.parquet")
+    (out / "run.json").write_text(json.dumps({
+        "as_of": a.as_of.isoformat(), "format": a.format, "league": a.league,
+        "sleeper_pull": sl.pull_date.isoformat() if sl.pull_date else None, "leagues": a.leagues, "seed": a.seed,
+        "me": a.me, "free_agents": int(len(pool)), "stash": int(len(stash)), "rookies_free": int(np.isin(rookies, pool).sum()),
+        "cut": ctx.player_id[cut] if cut is not None else None, "cut_reason": why,
+        "active": active.height, "capacity": capacity, "taxi_open": taxi_open, "unmatched_active": unmatched,
+        "discount": fmt.discount, "runtime_s": {"context": round(t1 - t0), "cut": round(t2 - t1), "adds": round(t3 - t2)},
+        "data_dir": str(data_dir()),
+    }, indent=2))
+    log.info("wrote %s", out)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--as-of", required=True, type=date.fromisoformat)
@@ -680,7 +779,11 @@ def main() -> None:
     ap.add_argument("--no-values", action="store_true", help="title odds only")
     ap.add_argument("--redraft", action="store_true",
                     help="only this season counts: no picks, free-agent waiver level and pickups (ben, 2026-11-26)")
-    ap.add_argument("--free-agents", type=int, default=60, help="redraft: free agents valued as pickups for --me")
+    ap.add_argument("--free-agents", type=int, default=60,
+                    help="redraft or --waivers: free agents valued as pickups for --me")
+    ap.add_argument("--waivers", action="store_true",
+                    help="dynasty waiver pickups for --me: each free agent added, cutting --me's active "
+                         "player worth least to his title odds; rookies to an open taxi spot (ben, 2026-11-27)")
     ap.add_argument("--fits-format", default=None,
                     help="format whose saved fits to use (default --format); its scoring is the base for --scale-scoring")
     ap.add_argument("--scale-scoring", default=None,
@@ -708,6 +811,8 @@ def main() -> None:
                      load_raw("players"), S.rostered(sl)["sleeper_id"].to_list())
     lg = league_setup(sl, ctx, xw, dict(load_format(a.format).lineup))
     me = lg.owners.index(a.me) if a.me else -1
+    if a.waivers:
+        return waivers_main(a, sl, ctx, lg, xw, me, t0, t1)
     fa: list[Asset] = []
     if a.redraft:
         ctx, lg, fa = redraft_setup(ctx, lg, me, a.free_agents)
