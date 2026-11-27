@@ -109,3 +109,43 @@ def test_division_winners_take_the_top_seeds():
     # Batched over leading axes, ties on record go to points for.
     w = np.stack([wins, np.array([6.0, 6.0, 3.0, 10.0, 10.0, 6.0])])
     assert O.seed_order(w, pf, div)[1].tolist() == [3, 1, 4, 5, 0, 2]
+
+
+def _ctx_fa() -> O.Context:
+    """Four QBs: team 0 has a 5-PPG starter (and a taxi QB), team 1 a 10-PPG
+    one, and a 40-PPG QB sits unrostered."""
+    ctx = _ctx([5.0, 40.0, 10.0])
+    D, J = ctx.talent.shape[0], ctx.talent.shape[2]
+    tal = np.concatenate([ctx.talent, np.full((D, 1, J), 40.0)], 1)
+    return replace(ctx, player_id=ctx.player_id + ["gd"], position=np.array(["QB"] * 4, object),
+                   talent=tal, share=np.ones((D, 4, J)))
+
+
+def test_redraft_values_are_the_first_season_of_the_full_run():
+    ctx = _ctx([15.0, 40.0, 20.0])
+    lg = _setup(ctx)
+    assets = [a for a in O.assets_for(lg, 0) if a.kind == "player"]
+    rctx, rlg = O.redraft_context(ctx), replace(lg, picks=[])
+    known, rknown = ctx.talent.mean(0), rctx.talent.mean(0)
+    for i in range(30):
+        # Same random stream per path: this season is drawn first, so it matches exactly.
+        full = O.simulate_path(ctx, lg, i % 4, 2, np.random.default_rng([9, i]), known, assets, {0: 0})
+        one = O.simulate_path(rctx, rlg, i % 4, 1, np.random.default_rng([9, i]), rknown, assets, {0: 0})
+        assert (full[0][0] == one[0][0]).all() and (full[1][0] == one[1][0]).all()
+
+
+def test_redraft_free_agent_can_be_picked_up_and_sets_the_waiver_level():
+    ctx = _ctx_fa()
+    lg = _setup(ctx)
+    assert lg.roster.tolist() == [0, 0, 1, -1]
+    rctx, rlg, fa = O.redraft_setup(O.redraft_context(ctx), lg, 0, free_agents=5, rank=1)
+    assert rctx.waiver["QB"] == 40.0 and rlg.picks == [] and rlg.waiver_slots["QB"] >= 1
+    assert [(a.ref, a.team, a.mode) for a in fa] == [(3, 0, "add")]
+    rng = np.random.default_rng(4)
+    # Waiver refill off: adding the 40-PPG free agent (cutting QB 0) wins team 0 the title far more often.
+    plain = replace(rlg, waiver_slots={"QB": 0})
+    d = np.stack([O.simulate_path(rctx, plain, i % 4, 1, rng, rctx.talent.mean(0), fa, {0: 0})[1] for i in range(60)])
+    assert d[:, 0, 0].mean() > 0.4
+    # The free agent alone never scores for anyone.
+    places = np.stack([O.simulate_path(rctx, plain, i % 4, 1, rng, rctx.talent.mean(0))[0] for i in range(60)])
+    assert (places[:, 0, 1] == 0).mean() > 0.6     # team 1 (10 PPG) beats team 0 (5 PPG)

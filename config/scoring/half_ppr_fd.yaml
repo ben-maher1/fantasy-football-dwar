@@ -1,0 +1,18 @@
+# Half PPR plus 0.5 per rushing or receiving first down: ben's redraft league
+# "Length" (Sleeper 1389690783459733504, read 2026-11-26).
+name: half_ppr_fd
+pass_yd: 0.04
+pass_td: 4
+pass_int: -2
+pass_2pt: 2
+rush_yd: 0.1
+rush_td: 6
+rush_2pt: 2
+rush_fd: 0.5
+rec: 0.5
+rec_yd: 0.1
+rec_td: 6
+rec_2pt: 2
+rec_fd: 0.5
+fumble_lost: -2
+st_td: 6

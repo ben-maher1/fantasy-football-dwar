@@ -1,0 +1,16 @@
+# ben's redraft league "Length" (Sleeper 1389690783459733504, read 2026-11-26):
+# 12 teams, QB/2RB/2WR/TE/FLEX/SUPERFLEX, 6 bench + 2 IR, half PPR plus 0.5 per
+# rushing or receiving first down. Redraft only: run league_odds --redraft with
+# --fits-format 1qb_3flex_half_ppr --scale-scoring half_ppr_fd (ben, 2026-11-26:
+# scale each player's half-PPR points rather than refit).
+name: length_sf_half_ppr_fd
+scoring: half_ppr_fd
+teams: 12
+lineup:
+  QB: 1
+  RB: 2
+  WR: 2
+  TE: 1
+  FLEX: 1        # RB/WR/TE
+  SUPERFLEX: 1   # QB/RB/WR/TE
+discount: 0.85   # unused in redraft (one season)

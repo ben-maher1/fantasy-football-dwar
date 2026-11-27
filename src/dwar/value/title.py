@@ -166,11 +166,13 @@ def center_for(likelihood: str, talent: np.ndarray, params: dict, iters: int = 4
 def lineup_scores(key: np.ndarray, pts: np.ndarray, pos: np.ndarray, lineup: dict[str, int]) -> np.ndarray:
     """Points of the best lineup chosen by `key` (expected points, -inf when
     unavailable), scored by `pts`. `key`, `pts`: (..., slots); `pos`: (slots,)
-    position labels. FLEX takes RB/WR/TE left after the fixed slots."""
+    position labels. FLEX takes RB/WR/TE left after the fixed slots, then
+    SUPERFLEX the best QB/RB/WR/TE left (filling the narrower slot first is
+    optimal because SUPERFLEX accepts everything FLEX does)."""
     key = np.array(key, float, copy=True)
     total = np.zeros(key.shape[:-1])
     for p, n in lineup.items():
-        if p == "FLEX" or n == 0:
+        if p in ("FLEX", "SUPERFLEX") or n == 0:
             continue
         kp = np.where(pos == p, key, -np.inf)
         idx = np.argsort(-kp, axis=-1)[..., :n]
@@ -181,6 +183,12 @@ def lineup_scores(key: np.ndarray, pts: np.ndarray, pos: np.ndarray, lineup: dic
         kf = np.where(np.isin(pos, FLEX), key, -np.inf)
         idx = np.argsort(-kf, axis=-1)[..., :n]
         total += np.where(np.take_along_axis(kf, idx, -1) > -np.inf, np.take_along_axis(pts, idx, -1), 0.0).sum(-1)
+        np.put_along_axis(key, idx, -np.inf, -1)
+    n = lineup.get("SUPERFLEX", 0)
+    if n:
+        ks = np.where(np.isin(pos, ("QB",) + FLEX), key, -np.inf)
+        idx = np.argsort(-ks, axis=-1)[..., :n]
+        total += np.where(np.take_along_axis(ks, idx, -1) > -np.inf, np.take_along_axis(pts, idx, -1), 0.0).sum(-1)
     return total
 
 
